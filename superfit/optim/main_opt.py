@@ -168,7 +168,7 @@ def run_optimization_loop(init_opt_program, target_mesh, target, sketcher,
             
         all_coords = sketcher.make_homogenous_coords(all_coords)
 
-        primitive_sdfs, output_sdf = compiled_func_relaxed(all_coords, *transformed_params)
+        primitive_sdfs, output_sdf = compiled_func_relaxed(all_coords, transformed_params)
         output_sdf = output_sdf[0]
         mask = (output_sdf<= AlgConf.LOSS_BAND).float()
         if not mask.sum() > 0:

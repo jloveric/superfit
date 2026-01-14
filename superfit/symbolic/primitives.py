@@ -7,6 +7,7 @@ import sympy as sp
 from geolipi.symbolic.registry import register_symbol
 
 
+@register_symbol
 class SuperFrustum(gls.Primitive3D):
     """
     Primitive described in https://arxiv.org/abs/2512.09201.
@@ -22,6 +23,7 @@ class SuperFrustum(gls.Primitive3D):
             "onion": {"type": "float"},
         }
 
+@register_symbol
 class SolidSF(gls.GLFunction):
     @classmethod
     def default_specs(cls):
@@ -35,6 +37,7 @@ class SolidSF(gls.GLFunction):
             "logits": {"type": "Vector[4]"},
         }
 
+@register_symbol
 class SPBase(gls.Primitive3D):
 
     """
@@ -49,6 +52,7 @@ class SPBase(gls.Primitive3D):
             "dilate_3d": {"type": "float"},
         }
 
+@register_symbol
 class SPNeo(gls.Primitive3D):
 
     """

@@ -15,8 +15,6 @@ from ..algos.eval import get_recon_measure, MeasurePack
 from .compile_function import compile_program_jit_cached, compile_program_jit, compile_with_dummy_opt
 
 def optimize_primitive_assembly(in_program, target_mesh, target_sdf, sketcher,
-                       torch_compile=True,
-                       fast_mode=True,
                        n_prims_prev=0):
     """
     Optimized version of opt_till_saturation with configurable optimizer setup.
@@ -69,11 +67,11 @@ def optimize_primitive_assembly(in_program, target_mesh, target_sdf, sketcher,
     temperature = 1.0
     gmbled_opt_program = inject_temp_param(opt_program.tensor(dtype=AlgConf.OPT_DTYPE), temperature)
     
-    if fast_mode:
-        compiled_func_relaxed = compile_with_dummy_opt(gmbled_opt_program, sketcher, torch_compile=torch_compile)
+    if AlgConf.FastMode:
+        compiled_func_relaxed = compile_with_dummy_opt(gmbled_opt_program, sketcher, torch_compile=AlgConf.TorchCompile)
         # compiled_func_relaxed = compile_program_jit_cached(gmbled_opt_program, sketcher, torch_compile=torch_compile)
     else:
-        compiled_func_relaxed = compile_program_jit(gmbled_opt_program, sketcher, torch_compile=torch_compile)
+        compiled_func_relaxed = compile_program_jit(gmbled_opt_program, sketcher, torch_compile=AlgConf.TorchCompile)
     
     # Create parameter groups with different learning rates
     param_groups = []
@@ -82,7 +80,7 @@ def optimize_primitive_assembly(in_program, target_mesh, target_sdf, sketcher,
     if regular_params:
         param_groups.append({'params': regular_params, 'lr': AlgConf.OPT_LR_RATE})
     
-    if fast_mode:
+    if AlgConf.FastMode:
         out_program, out_stats = run_optimization_loop_fast(
             init_opt_program=opt_program,
             target_mesh=target_mesh,

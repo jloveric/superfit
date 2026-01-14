@@ -141,13 +141,13 @@ def split_solid_sf_packed_param(param):
 
     
 def recursive_ntc_to_ntc_ss(gls_expr):
-    if isinstance(gls_expr, mpss.NTC):
+    if isinstance(gls_expr, sps.NTC):
         new_args = []
         cur_expr = gls_expr.sympy()
         ntc_args = [cur_expr.get_arg(i) for i in range(len(gls_expr.args))]
         arg_0 = ntc_args[0]
         arg_1 = (ntc_args[1][0], ntc_args[2][0], ntc_args[3][0], ntc_args[4][0],)
-        new_expr = mpss.NTC_SS(arg_0, arg_1)
+        new_expr = sps.NTC_SS(arg_0, arg_1)
         return new_expr
     else:
         if isinstance(gls_expr, gls.GLFunction):
@@ -163,14 +163,14 @@ def recursive_ntc_to_ntc_ss(gls_expr):
             return gls_expr
 
 def recursive_ntco_to_ntco_ss(gls_expr):
-    if isinstance(gls_expr, mpss.NTCO):
+    if isinstance(gls_expr, sps.NTCO):
         new_args = []
         cur_expr = gls_expr.sympy()
         ntc_args = [cur_expr.get_arg(i) for i in range(len(gls_expr.args))]
         arg_0 = ntc_args[0]
         arg_1 = (ntc_args[1][0], ntc_args[2][0], ntc_args[3][0], ntc_args[4][0],)
         arg_2 = ntc_args[5]
-        new_expr = mpss.NTCO_SS(arg_0, arg_1, arg_2)
+        new_expr = sps.NTCO_SS(arg_0, arg_1, arg_2)
         return new_expr
     else:
         if isinstance(gls_expr, gls.GLFunction):

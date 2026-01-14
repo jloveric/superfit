@@ -4,25 +4,38 @@ import time
 from geolipi.torch_compute import recursive_evaluate, Sketcher
 import argparse
 from superfit.algos.resfit import resfit
-from superfit.utils.mesh_preprocess import normalize_to_unit_cube, extract_mesh, target_cleanup_v2
-from superfit.utils.mesh_sdf import get_target_cubvh, renorm_target_sdf, sdf_to_mesh
+from superfit.utils.mesh_preprocess import process_mesh_to_sdf
 from superfit.utils.config import AlgorithmConfig as AlgConf
 import superfit.utils.config as config_options
 # Over parameterize - even more - see what happens - all on the base version. 
-import torch
+import torch as th
 
-torch.backends.cudnn.benchmark = True
-torch.set_float32_matmul_precision('medium')
-torch.backends.cuda.matmul.allow_tf32 = True
-# The flag below controls whether to allow TF32 on cuDNN. This flag defaults to True.
-torch.backends.cudnn.allow_tf32 = True
+th.set_float32_matmul_precision("medium")
+th.backends.cudnn.benchmark = True
+
+# th.backends.fp32_precision = "tf32"                 # global default
+# th.backends.cuda.matmul.fp32_precision = "tf32"     # matmul/bmm
+# th.backends.cudnn.fp32_precision = "tf32"           # cuDNN backend default
+
+# Fast matmuls (TF32 on Ampere+)
+# th.backends.cuda.matmul.fp32_precision = "tf32"   # or "ieee" for full precision  [oai_citation:1‡PyTorch Documentation](https://docs.pytorch.org/docs/stable/notes/numerical_accuracy.html?utm_source=chatgpt.com)
+# Fast cuDNN convs (if you do convs; safe to set even if you don’t)
+# th.backends.cudnn.conv.fp32_precision = "tf32"    # 2.9+ recommended API  [oai_citation:2‡GitHub](https://github.com/pytorch/pytorch/issues/166286?utm_source=chatgpt.com)
+# cuDNN algorithm search (only helps if conv input sizes are mostly constant)
+# th.backends.cudnn.benchmark = True
 
 def main_shape_wise(args):
     #### Set Mode.  
     input_mesh_file = args.input_mesh_file
     save_dir = args.save_dir
     config_options.main_setting()
-
+    if args.fastmode:
+        AlgConf.FastMode = True
+        AlgConf.TorchCompile = True
+    else:
+        AlgConf.FastMode = False
+        AlgConf.TorchCompile = False
+    config_options.low_cost_mode()
     failed_indices = []
     if not os.path.exists(save_dir):
         os.makedirs(save_dir, exist_ok=True)
@@ -39,12 +52,7 @@ def main_shape_wise(args):
     sketcher_3d = Sketcher(resolution=AlgConf.DATA_RESOLUTION, n_dims=3)
     save_file_temp = os.path.join(save_dir, f"resfit_prog.pkl")
     
-    input_mesh = extract_mesh(input_mesh_file)
-    input_mesh = normalize_to_unit_cube(input_mesh)
-    target_sdf = get_target_cubvh(input_mesh, sketcher_3d, mode="raystab")
-    target_sdf = target_cleanup_v2(target_sdf, sketcher_3d)
-    target_sdf = renorm_target_sdf(target_sdf, sketcher_3d)
-    mesh = sdf_to_mesh(target_sdf, sketcher_3d)
+    mesh, target_sdf = process_mesh_to_sdf(input_mesh_file, sketcher_3d)
 
     if not mesh.is_watertight:
         raise ValueError(f"------- Non Watertight Mesh -------")
@@ -72,6 +80,17 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--input_mesh_file", type=str, required=True)
     parser.add_argument("--save_dir", type=str, required=True)
+    parser.add_argument("--profile_path", type=str, required=False, default=None)
+    parser.add_argument("--fastmode", action="store_true", required=False, default=False)
+
     args = parser.parse_args()
-    main_shape_wise(args)
-    
+    if args.profile_path is not None:
+        import cProfile
+        import pstats
+        def main():
+            main_shape_wise(args)
+        cProfile.run("main()", args.profile_path)
+        pstats.Stats(args.profile_path).strip_dirs().sort_stats("cumtime").print_stats(50)
+    else:
+        main_shape_wise(args)
+# python scripts/mesh_to_pa.py --input_mesh_file /media/aditya/OS/data/toys_4k/toys4k_obj_files/airplane/airplane_007/mesh.obj --save_dir ../outputs/basic

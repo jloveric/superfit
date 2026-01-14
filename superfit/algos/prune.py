@@ -56,6 +56,10 @@ def main_pruning_pipeline(in_expr, mesh, target_sdf, sketcher, measure=None):
     stats["pruning_prune_tiny_parts_recon_measure"] = best_recon_measure
     stats["pruning_prune_tiny_parts_n_prim"] = best_n_prim
     stats["pruning_prune_tiny_parts_obj"] = best_obj
+    sel_opt_program, best_recon_measure, best_n_prim, best_obj = prune_tiny_parts_v2(sel_opt_program, sketcher, measure_pack)
+    stats["pruning_prune_tiny_parts_recon_measure"] = best_recon_measure
+    stats["pruning_prune_tiny_parts_n_prim"] = best_n_prim
+    stats["pruning_prune_tiny_parts_obj"] = best_obj
     # sel_opt_program, best_recon_measure, best_n_prim, best_obj = top_down_pruning_recursive(opt_program, sketcher_3d, measure_pack)
     # Alternative subtractions:
     cur_recon_measure = get_recon_measure(sel_opt_program, sketcher, measure_pack)
@@ -321,6 +325,7 @@ def leave_one_out_greedy_pruning(in_expr, sketcher, measure_pack):
     print(f"Best program size: {best_n_prim}")
     return best_expr, best_recon_measure, best_n_prim, best_obj
 
+# Alternative - For tiny parts, if Exec(P-A) > 0, or if I(A, T) = 0, then remove A
 def prune_tiny_parts(in_expr, sketcher, measure_pack):
 
     print("==== Prune Tiny Parts greedy pruning ====")
@@ -395,6 +400,67 @@ def prune_tiny_parts(in_expr, sketcher, measure_pack):
     print(f"Best OBJ: {best_obj}")
     print(f"Best program size: {best_n_prim}")
     return best_expr, best_recon_measure, best_n_prim, best_obj
+
+
+# Alternative - For tiny parts, if I(A, T) = 0, then remove A
+def prune_tiny_parts_v2(in_expr, sketcher, measure_pack):
+
+    print("==== Prune Tiny Parts V2 greedy pruning ====")
+    cur_recon_measure = get_recon_measure(in_expr, sketcher, measure_pack)
+    cur_n_prim = len(gather_primitives(in_expr))
+    cur_obj = cur_recon_measure + measure_pack.len_weight * cur_n_prim
+    print(f"Initial {measure_pack.measure}: {cur_recon_measure}")
+    print(f"Initial OBJ: {cur_obj}")
+    print(f"Initial program size: {cur_n_prim}")
+
+    # Check which singular ones can be left out.
+    # Try all NCN combinations of leaving them out. 
+    primitives = gather_primitives(in_expr)
+    sm_ops = gather_smooth_union_ops(in_expr)
+
+    n_prims = []
+    all_execs = []
+    for expr in primitives:
+        cur_exec = recursive_evaluate(expr.tensor(), sketcher, relaxed_eval=False)
+        all_execs.append(cur_exec)
+        n_prims.append(len(gather_primitives(expr)))
+    all_execs = th.stack(all_execs, dim=0)
+    
+    all_occs = all_execs <= 0
+    vol = (all_occs).float().sum(dim=1) / (sketcher.resolution ** 3)
+    # Second condition - I(A, T) = 0
+    intersection_measures = th.logical_and(all_occs, measure_pack.target_sdf[None, :] <= 0).float().sum(dim=1)
+
+    vol_removal_options = [ind for ind, x in enumerate(vol) if x < MIN_VOL_LIMIT]
+    intersection_removal_options = [ind for ind, x in enumerate(intersection_measures) if x == 0]
+    removal_options = set(vol_removal_options).intersection(set(intersection_removal_options))
+    try_0_removal = False
+    if 0 in removal_options:
+        try_0_removal = True
+        removal_options.remove(0)
+    
+    if len(removal_options) == 0:
+        print("==== No tiny parts found ====")
+        # Early exit!
+        return in_expr, cur_recon_measure, cur_n_prim, cur_obj
+
+    print(f"==== found {len(removal_options)} prims to drop ====")
+    temp_ops = [x for ind, x in enumerate(sm_ops) if ind +1 not in removal_options]
+    temp_primitives = [x for ind, x in enumerate(primitives) if ind not in removal_options]
+    if try_0_removal and len(temp_ops) > 1:
+        # Is this correct?
+        temp_ops = temp_ops[1:]
+        temp_primitives = temp_primitives[1:]
+    best_expr = generate_from_sm_ops_and_primitives(temp_ops, temp_primitives)
+
+    best_recon_measure = get_recon_measure(best_expr, sketcher, measure_pack)
+    best_n_prim = len(gather_primitives(in_expr))
+    best_obj = cur_recon_measure + measure_pack.len_weight * cur_n_prim
+    print(f"Best {measure_pack.measure}: {best_recon_measure}")
+    print(f"Best OBJ: {best_obj}")
+    print(f"Best program size: {best_n_prim}")
+    return best_expr, best_recon_measure, best_n_prim, best_obj
+
 
 
 def __top_down_pruning(in_expr, sketcher, measure_pack, best_expr=None, best_recon_measure=0.0, best_n_prim=0, best_obj=0.0):

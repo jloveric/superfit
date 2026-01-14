@@ -377,8 +377,8 @@ def generate_prim_initializations(
     (Cleaned and lightly optimized; logic preserved.)
     """
     primitive_fits = []
-    points = sketcher_3d.get_base_coords()  # [N,3]
-    device, dtype = points.device, points.dtype
+    points = sketcher_3d.get_base_coords().to(th.float32)  # [N,3]
+    device, dtype = points.device, th.float32
 
     # --- cached tiny tensors / constants (avoid reallocations in loop) ---
     eps = EPS_MEDIUM

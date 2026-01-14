@@ -14,6 +14,7 @@ from sysl.shader.shader_module import SMMap
 from string import Template
 DROP_CONST = 1.0
 
+@register_symbol
 class PrimitiveMarker(gls.GLFunction):
     ...
 
@@ -44,6 +45,7 @@ def eval_primitive_marker(expression: PrimitiveMarker, global_sc: GlobalShaderCo
     global_sc = rec_shader_eval(sub_expr, global_sc)
     return global_sc
 
+@register_symbol
 class StochasticPrimitive(gls.GLFunction):
     ...
 

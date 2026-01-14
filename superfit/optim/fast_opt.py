@@ -148,7 +148,7 @@ def run_optimization_loop_fast(init_opt_program, target_mesh, target, sketcher,
             all_coords = perform_batched_stochastic_precondition(all_coords, i-decay_start_iter, stochastic_precondition_n_iters)
             
         ## MAIN FORWARD
-        primitive_sdfs, output_sdf = compiled_ops.compiled_assembly_execution(all_coords, *transformed_params)
+        primitive_sdfs, output_sdf = compiled_ops.compiled_assembly_execution(all_coords, transformed_params)
         # primitive_sdfs, output_sdf = opt_functions(all_coords, *transformed_params)
         output_sdf = output_sdf[0]
         mask = (output_sdf <= AlgConf.LOSS_BAND).float()
@@ -263,7 +263,7 @@ def run_optimization_loop_fast(init_opt_program, target_mesh, target, sketcher,
                 decay_start_iter = i
                 iterations_without_improvement = 0
                 stochastic_precondition_n_iters = i + stochastic_precondition_n_iters
-                iter_limit = i + base_iters
+                iter_limit = i + base_iters * 2
                 max_iter = max(iter_limit, AlgConf.MAX_ITER)
                 print(f"---- new max_iter: {max_iter}, new iter_limit: {iter_limit}  ----")
 

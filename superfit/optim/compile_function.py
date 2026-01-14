@@ -38,22 +38,35 @@ class CompiledOps:
 def compile_with_dummy_opt(in_program, sketcher, 
             isolated_vars=True,
             torch_compile=False):
+    if not torch_compile:
+        def execute(coords, all_params):
+            output = batched_sf_packed_stochastic_su_eval(coords, *all_params)
+            return output
+        compiled_ops = CompiledOps(
+            compiled_assembly_execution=execute,
+            compiled_loss_function=compute_total_loss,
+        )
+        return compiled_ops
+
 
     prim_function = batched_sf_packed_stochastic_eval
     comp_func = th.compile(prim_function, 
         backend="inductor",
-        mode="max-autotune",
-        dynamic=True,
+        # mode="max-autotune",
+        mode="default",
         fullgraph=True,
+        dynamic=True,
     )
     compiled_su_func = th.compile(_sdf_smooth_union_pair, 
         backend="inductor",
-        mode="max-autotune",
-        dynamic=True,
+        # mode="max-autotune",
+        mode="default",
         fullgraph=True,
+        dynamic=True,
     )
 
-    def compiled_assembly_execution(coords, params, su_vals, logits, temperature): 
+    def compiled_assembly_execution(coords, all_params):
+        params, su_vals, logits, temperature = all_params 
         output = comp_func(coords, params, logits, temperature)
         K = output.shape[0]
 
@@ -66,9 +79,10 @@ def compile_with_dummy_opt(in_program, sketcher,
 
     compiled_loss_function = th.compile(compute_total_loss, 
         backend="inductor",
-        mode="max-autotune",
-        dynamic=True,
+        # mode="max-autotune",
+        mode="default",
         fullgraph=True,
+        dynamic=True,
     )
     # Primitive Instantiation
     # Loop: 
@@ -131,14 +145,17 @@ def compile_with_dummy_opt(in_program, sketcher,
 
 
     for i in range(10):
+
+        th.compiler.cudagraph_mark_step_begin()
         optim.zero_grad()
         start_time = time.time()
-        transformed_params = _params_from_variables_fast(cur_vars)
+        transformed_params = _params_from_variables_fast_sf(cur_vars)
         transformed_params.append(_temperature)
+        # transformed_params = [x for x in cur_vars] + [_temperature]
         # Concatenate all coordinates
         all_coords = th.cat([_coords, _surface_coords, _surface_adj_coords], dim=1)
         ## MAIN FORWARD
-        primitive_sdfs, output_sdf = compiled_assembly_execution(all_coords, *transformed_params)
+        primitive_sdfs, output_sdf = compiled_assembly_execution(all_coords, transformed_params)
         loss_1 = primitive_sdfs.sum() + output_sdf.sum()
         loss_2 = compiled_loss_function(output_shape_occ, hard_target_fl, 
                                         output_surface_adj_occ, hard_target_surface_adj_fl, 
@@ -149,7 +166,6 @@ def compile_with_dummy_opt(in_program, sketcher,
                                         scale_factor, _curvature_weights)
         total_loss = loss_1 + loss_2
         total_loss.backward()
-        # total_loss.backward()
         optim.step()
         end_time = time.time()
         print(f"Time taken for iteration: {end_time - start_time}")

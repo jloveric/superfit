@@ -61,6 +61,7 @@ def axis_angle_to_rotation_matrix(axis_angle: th.Tensor) -> th.Tensor:
     Convert an axis-angle vector (..., 3) to a rotation matrix (..., 3, 3)
     using the Rodrigues' rotation formula.
     """
+    B = axis_angle.shape[0]
     theta = th.linalg.norm(axis_angle, dim=-1, keepdim=True).clamp(min=1e-8)  # (..., 1)
     axis = axis_angle / theta  # normalized axis (..., 3)
 
@@ -70,7 +71,7 @@ def axis_angle_to_rotation_matrix(axis_angle: th.Tensor) -> th.Tensor:
         zero, -z,    y,
          z,  zero,  -x,
         -y,   x,   zero
-    ], dim=-1).reshape(axis.shape[:-1] + (3, 3))  # (..., 3, 3)
+    ], dim=-1).reshape((B, 3, 3))  # (..., 3, 3)
 
     I = th.eye(3, device=axis.device, dtype=axis.dtype).expand(K.shape)
     sin = th.sin(theta)[:, None]
@@ -79,7 +80,51 @@ def axis_angle_to_rotation_matrix(axis_angle: th.Tensor) -> th.Tensor:
     R = I + sin * K + (1 - cos) * (K @ K)  # Rodrigues' formula
 
     return R
-    
+
+def axis_angle_to_rotation_matrix2(axis_angle: th.Tensor, eps: float = 1e-8) -> th.Tensor:
+    """
+    axis_angle: (..., 3) axis-angle vector, where direction is axis and magnitude is angle (radians)
+    returns: (..., 3, 3)
+    Compile-friendly (torch.compile) implementation.
+    """
+    # angle: (..., 1)
+    theta = th.linalg.norm(axis_angle, dim=-1, keepdim=True)
+
+    # Safe normalized axis: (..., 3)
+    axis = axis_angle / (theta + eps)
+
+    x = axis[..., 0]
+    y = axis[..., 1]
+    z = axis[..., 2]
+
+    ct = th.cos(theta[..., 0])
+    st = th.sin(theta[..., 0])
+    one_m_ct = 1.0 - ct
+
+    # Rodrigues closed form
+    r00 = ct + x * x * one_m_ct
+    r01 = x * y * one_m_ct - z * st
+    r02 = x * z * one_m_ct + y * st
+
+    r10 = y * x * one_m_ct + z * st
+    r11 = ct + y * y * one_m_ct
+    r12 = y * z * one_m_ct - x * st
+
+    r20 = z * x * one_m_ct - y * st
+    r21 = z * y * one_m_ct + x * st
+    r22 = ct + z * z * one_m_ct
+
+    R = th.stack(
+        (r00, r01, r02,
+         r10, r11, r12,
+         r20, r21, r22),
+        dim=-1
+    )
+
+    # Use reshape with explicit dims; avoids tuple math like axis.shape[:-1] + (3,3)
+    out_shape = axis_angle.shape[:-1] + (3, 3)
+    return R.reshape(out_shape)
+
 def _sdf_smooth_union_pair(sdf_a: th.Tensor, sdf_b: th.Tensor, k: th.Tensor) -> th.Tensor:
     """
     Smooth union of two SDFs (exactly your formula).

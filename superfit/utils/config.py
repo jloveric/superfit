@@ -128,9 +128,11 @@ class AlgorithmConfig:
     FREEZE_PREV_PRIMS: bool = False
     
     OPT_DTYPE: str = th.float32
-    AOT_ARTIFACT_FILE: str = "/oscar/data/dritchi1/aganesh8/projects/aot/aot_artifact_2.pt"
+    AOT_ARTIFACT_FILE: str = "../aot/aot_artifact_2.pt"
     SAVE_JIT_CACHE: bool = True
     OVERWRITE_JIT_CACHE: bool = True
+    TorchCompile: bool = True
+    FastMode: bool = True
     
     @staticmethod
     def save_to_file(file_path):
@@ -158,72 +160,63 @@ class AlgorithmConfig:
         with open(file_path, "w") as f:
             json.dump(configurations, f, indent=4)
 
-def setup_decompose_config():
-
-    # DECOMPOSE:
-    AlgorithmConfig.DECOMPOSE_SIZE_LIMIT: int = 10
-    AlgorithmConfig.DECOMPOSE_MODE: str = "COACD"
-    AlgorithmConfig.DECOMPOSE_CONFIG: Dict[str, Any] ={
-        # COACD
-        "threshold": 0.1,
-        "max_convex_hull": 10,
-        
-        # VHACD
-        # "maxConvexHulls": 1,
-        
-        # MSD_NEW
-        # "min_eroded_part_size_ratio": 0.005,
-        # "min_part_size_ratio": 0.005,
-        # "concavity_threshold": 0.15,
-        # "size_limit": 20,
-    }
     
-def only_main_occ():
-    AlgorithmConfig.LOSS_OCC_ALPHA: float = 1.0
-    AlgorithmConfig.LOSS_SURFACE_ADJ_OCC_ALPHA: float = 0.0
-    AlgorithmConfig.LOSS_SURFACE_SDF_ALPHA: float = 0.0
-    AlgorithmConfig.LOSS_PARAM_REGULARIZATION_ALPHA: float = 0
-    AlgorithmConfig.LOSS_PRIMITIVE_COUNT_ALPHA: float = 0
-    AlgorithmConfig.LOSS_OVERLAP_ALPHA: float = 0  
-    AlgorithmConfig.LOSS_SHAPE_UNOVERLAP_ALPHA: float = 0.0
-    AlgorithmConfig.STOCHASTIC_DROPOUT: bool = False
-    AlgorithmConfig.SKIP_SURFACE: bool = True
+def main_setting():
 
-def surface_loss_active():
-    AlgorithmConfig.SKIP_SURFACE: str = False
-    AlgorithmConfig.RENEW_PTS_ITER: int = 50
-    AlgorithmConfig.N_SURFACE_POINTS: int = 150_000
-    AlgorithmConfig.LOSS_SURFACE_ADJ_OCC_ALPHA: float = 2.0
-    AlgorithmConfig.LOSS_SURFACE_SDF_ALPHA: float = 0.2
-
-
-def prog_quality_active():
-    # AlgorithmConfig.LOSS_PARAM_REGULARIZATION_ALPHA: float = 1e-5
-    AlgorithmConfig.LOSS_OVERLAP_ALPHA: float = 1e-3
-    AlgorithmConfig.LOSS_SHAPE_UNOVERLAP_ALPHA: float = 1e-3
-
-def prog_length_active():
-    AlgorithmConfig.STOCHASTIC_DROPOUT: bool = True
-    AlgorithmConfig.LOSS_PRIMITIVE_COUNT_ALPHA: float = 1e-3
-
-def low_cost_mode():
-    AlgorithmConfig.RENEW_PTS_ITER: int = 100
-    AlgorithmConfig.N_SURFACE_POINTS: int = 50_000
-    AlgorithmConfig.TARGET_MODE: str = "dilated"
-    AlgorithmConfig.TARGET_MODE_DILATION: float = 0.2
-    AlgorithmConfig.OPT_RESOLUTION: int =64
-
-    AlgorithmConfig.N_ITERS: int = 350
-    AlgorithmConfig.SAT_PATIENCE: int = 100
-    AlgorithmConfig.MAX_ITER: int = 1200
-    AlgorithmConfig.OPT_LR_RATE: float = 0.01
-
-def low_cost_mode_v2():
     AlgorithmConfig.RENEW_PTS_ITER: int = 100
     AlgorithmConfig.N_SURFACE_POINTS: int = 100_000
     AlgorithmConfig.TARGET_MODE: str = "dilated"
+    # AlgorithmConfig.TARGET_MODE: str = None
     AlgorithmConfig.TARGET_MODE_DILATION: float = 0.2
-    AlgorithmConfig.OPT_RESOLUTION: int =64
+    AlgorithmConfig.OPT_RESOLUTION: int = 128
+
+
+    AlgorithmConfig.N_ITERS: int = 400
+    AlgorithmConfig.SAT_PATIENCE: int = 100
+    AlgorithmConfig.MAX_ITER: int = 1600
+    AlgorithmConfig.OPT_LR_RATE: float = 0.01
+
+    AlgorithmConfig.USE_CURVATURE_WEIGHTS = True
+    AlgorithmConfig.DO_PRUNE = True
+    AlgorithmConfig.OPT_HACK_GRAD = False
+    AlgorithmConfig.TVERSKY_MODE = False
+
+    # Next: With Quality and Length Losses. 
+    AlgorithmConfig.LOSS_PARAM_REGULARIZATION_ALPHA = 1e-8
+    AlgorithmConfig.STOCHASTIC_DROPOUT: bool = True
+    AlgorithmConfig.LOSS_PRIMITIVE_COUNT_ALPHA: float = 2e-3
+    AlgorithmConfig.LOSS_OVERLAP_ALPHA: float = 2e-2
+    AlgorithmConfig.LOSS_SHAPE_UNOVERLAP_ALPHA: float = 2e-2
+
+
+    AlgorithmConfig.MPS_MAX_ITER = 10
+    AlgorithmConfig.DECOMPOSE_MODE = "MSD_NEW"
+    AlgorithmConfig.DECOMPOSE_SIZE_LIMIT = 20
+    AlgorithmConfig.DECOMPOSE_CONFIG = {
+        "min_eroded_part_size_ratio": 0.005,
+        "min_part_size_ratio": 0.0005,
+        "size_limit": 20,
+        "max_mps_iter": 7,
+    }
+
+def low_cost_mode():
+    AlgorithmConfig.RENEW_PTS_ITER: int = 100
+    AlgorithmConfig.N_SURFACE_POINTS: int = 100_000
+    AlgorithmConfig.TARGET_MODE: str = "dilated"
+    AlgorithmConfig.TARGET_MODE_DILATION: float = 0.1
+    AlgorithmConfig.OPT_RESOLUTION: int = 64
+
+    # AlgorithmConfig.N_ITERS: int = 350
+    # AlgorithmConfig.SAT_PATIENCE: int = 100
+    # AlgorithmConfig.MAX_ITER: int = 1200
+    # AlgorithmConfig.OPT_LR_RATE: float = 0.01
+
+def low_cost_mode_v2():
+    # AlgorithmConfig.RENEW_PTS_ITER: int = 100
+    # AlgorithmConfig.N_SURFACE_POINTS: int = 100_000
+    # AlgorithmConfig.TARGET_MODE: str = "dilated"
+    # AlgorithmConfig.TARGET_MODE_DILATION: float = 0.2
+    # AlgorithmConfig.OPT_RESOLUTION: int =64
 
     AlgorithmConfig.N_ITERS: int = 350
     AlgorithmConfig.SAT_PATIENCE: int = 100
@@ -242,58 +235,6 @@ def medium_cost_mode():
     AlgorithmConfig.MAX_ITER: int = 1600
     AlgorithmConfig.OPT_LR_RATE: float = 0.01
 
-
-def demo_semantic_loss():
-    only_main_occ()
-    AlgorithmConfig.LOSS_OCC_ALPHA: float = 0.0
-    AlgorithmConfig.SEMANTIC_LOSS: bool = True
-    AlgorithmConfig.LOSS_SEMANTIC_ALPHA: float = 1.0
-
-def main_setting():
-
-    setup_decompose_config()
-    only_main_occ()
-    surface_loss_active()
-
-
-    AlgorithmConfig.RENEW_PTS_ITER: int = 100
-    AlgorithmConfig.N_SURFACE_POINTS: int = 100_000
-    AlgorithmConfig.TARGET_MODE: str = "dilated"
-    # AlgorithmConfig.TARGET_MODE: str = None
-    AlgorithmConfig.TARGET_MODE_DILATION: float = 0.2
-    AlgorithmConfig.OPT_RESOLUTION: int = 128
-
-
-    AlgorithmConfig.N_ITERS: int = 400
-    AlgorithmConfig.SAT_PATIENCE: int = 100
-    AlgorithmConfig.MAX_ITER: int = 1600
-    AlgorithmConfig.OPT_LR_RATE: float = 0.01
-
-
-
-    AlgorithmConfig.USE_CURVATURE_WEIGHTS = True
-    AlgorithmConfig.OPT_HACK_GRAD = False
-    AlgorithmConfig.TVERSKY_MODE = False
-    AlgorithmConfig.DO_PRUNE = True
-
-    # Next: With Quality and Length Losses. 
-    AlgorithmConfig.LOSS_PARAM_REGULARIZATION_ALPHA = 1e-8
-    AlgorithmConfig.STOCHASTIC_DROPOUT: bool = True
-    AlgorithmConfig.LOSS_PRIMITIVE_COUNT_ALPHA: float = 2e-3
-    AlgorithmConfig.LOSS_OVERLAP_ALPHA: float = 2e-2
-    AlgorithmConfig.LOSS_SHAPE_UNOVERLAP_ALPHA: float = 2e-2
-
-
-    AlgorithmConfig.MPS_MAX_ITER = 10
-    AlgorithmConfig.DECOMPOSE_MODE = "MSD_NEW"
-    AlgorithmConfig.DECOMPOSE_SIZE_LIMIT = 20
-    AlgorithmConfig.DECOMPOSE_CONFIG = {
-        "min_eroded_part_size_ratio": 0.005,
-        "min_part_size_ratio": 0.001,
-        "concavity_threshold": 0.15,
-        "size_limit": 20,
-        "max_mps_iter": 7,
-    }
 
 def high_cost_mode():
     AlgorithmConfig.RENEW_PTS_ITER: int = 100

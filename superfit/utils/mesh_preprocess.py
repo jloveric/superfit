@@ -3,7 +3,7 @@ import numpy as np
 import trimesh
 import torch as th
 import sys
-from .mesh_sdf import renorm_target_sdf
+from .mesh_sdf import renorm_target_sdf, get_target_cubvh, sdf_to_mesh
 from .constants import MIN_VOLUME_LIMIT
 import cc3d
 
@@ -286,3 +286,29 @@ def target_cleanup_v2(target_sdf, sketcher_3d, min_volume_limit=MIN_VOLUME_LIMIT
 
     final_sdf = renorm_target_sdf(final_sdf, sketcher_3d)
     return final_sdf
+
+
+def process_mesh_to_sdf(input_mesh_file, sketcher_3d, inflate=False, inflate_amount=0.01):
+    """
+    Process a mesh file through the full pipeline to generate SDF and mesh.
+    
+    Args:
+        input_mesh_file: Path to the input mesh file
+        sketcher_3d: Sketcher instance for SDF computation
+        
+    Returns:
+        mesh: Processed trimesh.Trimesh object
+        target_sdf: Processed SDF tensor
+    """
+    input_mesh = extract_mesh(input_mesh_file)
+    input_mesh = normalize_to_unit_cube(input_mesh)
+    target_sdf = get_target_cubvh(input_mesh, sketcher_3d, mode="raystab")
+    target_sdf = target_cleanup_v2(target_sdf, sketcher_3d)
+    target_sdf = renorm_target_sdf(target_sdf, sketcher_3d)
+    # Inflate?
+    if inflate:
+        target_sdf = target_sdf - inflate_amount
+        target_sdf = renorm_target_sdf(target_sdf, sketcher_3d)
+    
+    mesh = sdf_to_mesh(target_sdf, sketcher_3d)
+    return mesh, target_sdf

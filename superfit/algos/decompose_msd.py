@@ -29,7 +29,7 @@ def update_labels_by_min_eroded_parts(labels_out, stats, min_eroded_part_size):
             label_map[x] = count
         else:
             label_map[x] = 0
-    new_labels_out = np.zeros_like(labels_out)
+    new_labels_out = th.zeros_like(labels_out)
     for x in range(1, N+1):
         new_labels_out[labels_out == x] = label_map[x]
     
@@ -93,6 +93,7 @@ def find_mo_parts(cur_target_sdf,
         # here for each do a reorg and check: 
         if valid_primitives.sum() > 0:
             print(f"Valid primitives found at threshold {cur_threshold}, iteration {i}")
+            labels_out = th.from_numpy(labels_out).to(sketcher_3d.device).long()
             updated_labels = update_labels_by_min_eroded_parts(labels_out, stats, min_eroded_part_size)
             selected_parts = filter_by_part_size(cur_target_sdf, 
                      updated_labels, 
@@ -101,7 +102,6 @@ def find_mo_parts(cur_target_sdf,
                      min_part_size)
             n_parts = len(selected_parts)
             print("found", n_parts, "parts after min part size filter")
-
             if len(selected_parts) > 0:
                 break
 
@@ -140,7 +140,7 @@ def decompose_msd(target_sdf, sketcher_3d,
                                               basic_jump_size, 
                                               min_eroded_part_size_ratio,
                                               min_part_size,)
-        # Valid parts -> 
+        # Valid parts ->
         n_parts = len(selected_parts)
         print("found", n_parts, "parts")
         if n_parts == 0:

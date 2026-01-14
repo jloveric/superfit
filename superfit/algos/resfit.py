@@ -24,8 +24,8 @@ def resfit(target_mesh,
     record_param=False,
     ):
 
-    prune_sketcher = Sketcher(resolution=AlgConf.PRUNE_RESOLUTION, n_dims=3)
-    decompose_sketcher = Sketcher(resolution=AlgConf.DECOMPOSE_RESOLUTION, n_dims=3)
+    prune_sketcher = Sketcher(resolution=AlgConf.PRUNE_RESOLUTION, dtype=th.float16, n_dims=3)
+    decompose_sketcher = Sketcher(resolution=AlgConf.DECOMPOSE_RESOLUTION, dtype=th.float16, n_dims=3)
     optim_sketcher = Sketcher(resolution=AlgConf.OPT_RESOLUTION, n_dims=3, dtype=AlgConf.OPT_DTYPE)
     # target = get_target_mesh2sdf(mesh)
     opt_program = None
@@ -55,62 +55,58 @@ def resfit(target_mesh,
     n_prims_prev = 0
     while cur_iter < AlgConf.MPS_MAX_ITER:
         # try:
-        cur_mps_iter_stats = {}
-        cur_iter_start_time = time.time()
-        # pruned_parts, all_indices = generate_partitions_sdf_v3(masked_target_sdf, sketcher, max_iter=max_iter_msd, min_part_size_global=min_volume_requirement, min_eroded_part_size_ratio=min_eroded_part_size_ratio)
-        if AlgConf.RUN_LAST_OPT and last_run:
-            pass
-        else:
-            pruned_parts, _ = msd_new(masked_target_sdf, decompose_sketcher, **AlgConf.DECOMPOSE_CONFIG)
-            if len(pruned_parts) == 0:
-                print("No parts found - stopping")
-                break
+        with th.no_grad():
+            cur_mps_iter_stats = {}
+            cur_iter_start_time = time.time()
+            # pruned_parts, all_indices = generate_partitions_sdf_v3(masked_target_sdf, sketcher, max_iter=max_iter_msd, min_part_size_global=min_volume_requirement, min_eroded_part_size_ratio=min_eroded_part_size_ratio)
+            if AlgConf.RUN_LAST_OPT and last_run:
+                pass
+            else:
+                pruned_parts, _ = msd_new(masked_target_sdf, decompose_sketcher, **AlgConf.DECOMPOSE_CONFIG)
+                if len(pruned_parts) == 0:
+                    print("No parts found - stopping")
+                    break
 
-            pruned_parts, _ = simple_cleanup_volumetric(pruned_parts, None, size_limit=AlgConf.DECOMPOSE_SIZE_LIMIT)
-            print("found", len(pruned_parts), "parts")
-            n_prims = len(pruned_parts) + len(primitives)
-            inverse_rate = n_prims
-            desired_prob = 0.9 ** (1 / inverse_rate)
-            desired_prob = min(desired_prob, 0.975) # Should we?
-            delta = np.log(desired_prob/ (1 - desired_prob))
-            primitive_fits = generate_prim_initializations(pruned_parts, decompose_sketcher)
-            # primitive_fits = generate_neo_prim_initializations_v3_rigid(pruned_parts, decompose_sketcher)
+                pruned_parts, _ = simple_cleanup_volumetric(pruned_parts, None, size_limit=AlgConf.DECOMPOSE_SIZE_LIMIT)
+                print("found", len(pruned_parts), "parts")
+                n_prims = len(pruned_parts) + len(primitives)
+                inverse_rate = n_prims
+                desired_prob = 0.9 ** (1 / inverse_rate)
+                desired_prob = min(desired_prob, 0.975) # Should we?
+                delta = np.log(desired_prob/ (1 - desired_prob))
+                primitive_fits = generate_prim_initializations(pruned_parts, decompose_sketcher)
+                # primitive_fits = generate_neo_prim_initializations_v3_rigid(pruned_parts, decompose_sketcher)
 
-            opt_program = get_init_prim_program(primitive_fits, decompose_sketcher, opt_program,
-                                                    stochastic_dropout=stochastic_dropout,
-                                                    logits_keep_drop=(delta/2, -delta/2),
-                                                    version=getattr(sps, AlgConf.PRIM_TYPE))
-            
-            end_time = time.time()
+                opt_program = get_init_prim_program(primitive_fits, decompose_sketcher, opt_program,
+                                                        stochastic_dropout=stochastic_dropout,
+                                                        logits_keep_drop=(delta/2, -delta/2),
+                                                        version=getattr(sps, AlgConf.PRIM_TYPE))
+                
+                end_time = time.time()
 
-        # Now optimize the program.
-        cur_mps_iter_stats["init_program"] = opt_program.sympy().state()
-        cur_mps_iter_stats["time_taken_initialization"] = end_time - cur_iter_start_time
-        # opt_program = convert_to_chained_expr(opt_program.tensor())
-        # opt_program = batch_primitives(opt_program)
+            # Now optimize the program.
+            cur_mps_iter_stats["init_program"] = opt_program.sympy().state()
+            cur_mps_iter_stats["time_taken_initialization"] = end_time - cur_iter_start_time
+            # opt_program = convert_to_chained_expr(opt_program.tensor())
+            # opt_program = batch_primitives(opt_program)
         start_time = time.time()
-        if AlgConf.OPT_HALF:
-            with th.autocast('cuda', dtype=th.float16):
-                new_opt_program, stats = optimize_primitive_assembly(opt_program.tensor(dtype=AlgConf.OPT_DTYPE), target_mesh, target_sdf_opt, optim_sketcher, n_prims_prev=n_prims_prev)
-        else:
-            new_opt_program, stats = optimize_primitive_assembly(opt_program.tensor(dtype=AlgConf.OPT_DTYPE), target_mesh, target_sdf_opt, optim_sketcher, n_prims_prev=n_prims_prev)
+        new_opt_program, stats = optimize_primitive_assembly(opt_program.tensor(dtype=AlgConf.OPT_DTYPE), target_mesh, target_sdf_opt, optim_sketcher, n_prims_prev=n_prims_prev)
         if stats['best_obj'] > stats['cur_obj']:
             opt_program = new_opt_program
-
         cur_mps_iter_stats["opt_program"] = opt_program.sympy().state()
 
         end_time = time.time()
         print(f"Time taken for optimization: {end_time - start_time}")
         cur_mps_iter_stats["time_taken_optimization"] = end_time - start_time
         cur_mps_iter_stats["optim_stats"] = stats
-        # opt_program = reverse_to_unbatched_expr(opt_program)
-        # try:
         if AlgConf.DO_PRUNE:
             start_time = time.time()
             with th.no_grad():
+                opt_program = opt_program.tensor(dtype=prune_sketcher.dtype)
                 cur_best_program, prune_stats = main_pruning_pipeline(opt_program, target_mesh, target_sdf_prune, prune_sketcher, measure=AlgConf.PRUNE_METRIC)
                 # if AlgConf.TVERSKY_MODE:
-                opt_program, _ = main_pruning_pipeline(opt_program, target_mesh, target_sdf_prune, prune_sketcher, measure="surface_tversky")
+                opt_program = cur_best_program
+                # opt_program, _ = main_pruning_pipeline(opt_program, target_mesh, target_sdf_prune, prune_sketcher, measure="surface_tversky")
                 # else:
                 # opt_program = cur_best_program
             end_time = time.time()
