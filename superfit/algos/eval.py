@@ -20,7 +20,9 @@ from ..optim.utils import sample_surface_proximal_points, get_sdf_and_gradients
 from ..optim.measures import get_iou, get_iou_set, get_curvature_aware_iou, get_curvature_aware_iou_set
 from ..utils.mesh_sdf import sdf_to_mesh, renorm_target_sdf, target_cleanup, get_target_cubvh
 from ..optim.curvature import get_points_and_weights
-from ..utils.config import AlgorithmConfig as AlgConf
+from ..utils.config import AlgorithmConfig as AlgConf, reset_eval_seeds
+from ..utils.stats import Stats
+from ..utils.logger import logger
 from ..symbolic.utils import n_prims_in_expr, fetch_singular_expr
 from ..optim.semantic_loss import SemanticLossHolder
 from .kmeans import primitive_semantic_nmi_fast
@@ -39,6 +41,12 @@ class MeasurePack:
         self.pt_target_occ = None
         self.pt_target_sdf = None
         self.curvature_weights = None
+    
+    def reset(self):
+        self.target_surface_pc = None
+        self.pt_target_occ = None
+        self.pt_target_sdf = None
+        self.curvature_weights = None
 
 
 
@@ -48,230 +56,210 @@ CD_MULTIPLIER = 100.0
 
 def eval_shape(pred_program, measure_pack, semantic_loss_holder: SemanticLossHolder,
                 inp_mode: str = "IRPF"):
+    # Reset seeds for evaluation to ensure consistent random sampling
+    reset_eval_seeds()
+    
     # Geometric
     # IOU at 128. 256. 512, IOU Surface proximal
     # # Code for resolution.
     input_mesh = measure_pack.target_mesh
-    stats = {}
-    for resolution in RESOLUTIONS:
-        sketcher_3d = Sketcher(resolution=resolution, n_dims=3)
-        target = get_target_cubvh(input_mesh, sketcher_3d)
-        target = target_cleanup(target, sketcher_3d)
-        target = renorm_target_sdf(target, sketcher_3d)
+    with Stats.scope("evaluation"):
+        for resolution in RESOLUTIONS:
+            sketcher_3d = Sketcher(resolution=resolution, n_dims=3)
+            target = get_target_cubvh(input_mesh, sketcher_3d)
+            target = target_cleanup(target, sketcher_3d)
+            target = renorm_target_sdf(target, sketcher_3d)
 
-        # target = target_cleanup(target, sketcher_3d)
+            # target = target_cleanup(target, sketcher_3d)
+            output = recursive_evaluate(pred_program.tensor(), sketcher_3d)
+            target_occ = (target <= 0.0).float()
+            output_occ = (output <= 0.0).float()
+            iou_val = get_iou(target_occ, output_occ).item()
+            Stats.record(f"iou@{resolution}", iou_val)
+
+        surface_proximal_samples = sample_surface_proximal_points(input_mesh, n_points=AlgConf.N_SURFACE_POINTS_EVAL, jitter_sigma=AlgConf.SURFACE_ADJ_PERTURBATION_SCALE)
+        surface_proximal_samples = th.from_numpy(surface_proximal_samples).float().to(sketcher_3d.device)
+        surface_proximal_sdf, surface_proximal_gradients = get_sdf_and_gradients(surface_proximal_samples, input_mesh, sketcher_3d)
+        surface_proximal_occ = (surface_proximal_sdf <= 0.0).float()
+        surface_eval = recursive_evaluate(pred_program.tensor(), sketcher_3d, coords=surface_proximal_samples)
+        surface_eval_occ = (surface_eval <= 0.0).float()
+        iou_gt_surface = get_iou(surface_proximal_occ, surface_eval_occ).item()
+        Stats.record("iou_gt_surface_proximal", iou_gt_surface)
+
+        # Bi directonal Surface Iou
         output = recursive_evaluate(pred_program.tensor(), sketcher_3d)
-        target_occ = (target <= 0.0).float()
-        output_occ = (output <= 0.0).float()
-        stats[f"iou@{resolution}"] = get_iou(target_occ, output_occ).item()
-        print(f"iou@{resolution}: {stats[f'iou@{resolution}']}")
+        pred_mesh = sdf_to_mesh(output, sketcher_3d)
+        surface_proximal_samples = sample_surface_proximal_points(pred_mesh, n_points=AlgConf.N_SURFACE_POINTS_EVAL, jitter_sigma=AlgConf.SURFACE_ADJ_PERTURBATION_SCALE)
+        surface_proximal_samples = th.from_numpy(surface_proximal_samples).float().to(sketcher_3d.device)
+        # Eval the program: 
+        surface_eval = recursive_evaluate(pred_program.tensor(), sketcher_3d, coords=surface_proximal_samples)
+        surface_eval_occ = (surface_eval <= 0.0).float()
+        # get GT:
+        surface_proximal_sdf, surface_proximal_gradients = get_sdf_and_gradients(surface_proximal_samples, input_mesh, sketcher_3d)
+        surface_proximal_occ = (surface_proximal_sdf <= 0.0).float()
+        iou_pred_surface = get_iou(surface_proximal_occ, surface_eval_occ).item()
+        Stats.record("iou_pred_surface_proximal", iou_pred_surface)
 
-    surface_proximal_samples = sample_surface_proximal_points(input_mesh, n_points=AlgConf.N_SURFACE_POINTS_EVAL, jitter_sigma=AlgConf.SURFACE_ADJ_PERTURBATION_SCALE)
-    surface_proximal_samples = th.from_numpy(surface_proximal_samples).float().to(sketcher_3d.device)
-    surface_proximal_sdf, surface_proximal_gradients = get_sdf_and_gradients(surface_proximal_samples, input_mesh, sketcher_3d)
-    surface_proximal_occ = (surface_proximal_sdf <= 0.0).float()
-    surface_eval = recursive_evaluate(pred_program.tensor(), sketcher_3d, coords=surface_proximal_samples)
-    surface_eval_occ = (surface_eval <= 0.0).float()
-    stats["iou_gt_surface_proximal"] = get_iou(surface_proximal_occ, surface_eval_occ).item()
-    print(f"iou_gt_surface_proximal: {stats['iou_gt_surface_proximal']}")
+        # Bi directonal Surface Iou
+        bi_dir_iou = (iou_gt_surface + iou_pred_surface) / 2.0
+        Stats.record("bi_directional_surface_iou", bi_dir_iou)
+        
+        surface_samples = sample_surface_proximal_points(input_mesh, n_points=AlgConf.N_SURFACE_POINTS_EVAL, jitter_sigma=0.0)
+        surface_samples = th.from_numpy(surface_samples).float().to(sketcher_3d.device)
+        surface_sdf, _  = get_sdf_and_gradients(surface_samples, pred_mesh, sketcher_3d)
+        mean_delta = th.mean(th.abs(surface_sdf))
+        Stats.record("mean_sdf_delta", mean_delta.item())
 
-    # Bi directonal Surface Iou
-    output = recursive_evaluate(pred_program.tensor(), sketcher_3d)
-    pred_mesh = sdf_to_mesh(output, sketcher_3d)
-    surface_proximal_samples = sample_surface_proximal_points(pred_mesh, n_points=AlgConf.N_SURFACE_POINTS_EVAL, jitter_sigma=AlgConf.SURFACE_ADJ_PERTURBATION_SCALE)
-    surface_proximal_samples = th.from_numpy(surface_proximal_samples).float().to(sketcher_3d.device)
-    # Eval the program: 
-    surface_eval = recursive_evaluate(pred_program.tensor(), sketcher_3d, coords=surface_proximal_samples)
-    surface_eval_occ = (surface_eval <= 0.0).float()
-    # get GT:
-    surface_proximal_sdf, surface_proximal_gradients = get_sdf_and_gradients(surface_proximal_samples, input_mesh, sketcher_3d)
-    surface_proximal_occ = (surface_proximal_sdf <= 0.0).float()
-    stats["iou_pred_surface_proximal"] = get_iou(surface_proximal_occ, surface_eval_occ).item()
-    print(f"iou_pred_surface_proximal: {stats['iou_pred_surface_proximal']}")
+        surface_samples_cd = sample_surface_proximal_points(input_mesh, n_points=CD_RES, jitter_sigma=0.0)
+        surface_samples_cd = th.from_numpy(surface_samples_cd).float().to(sketcher_3d.device)
+        # How do I get points on my surface?
+        # use 512 size program and onion... and farthest point sampling.
+        pred_points = sample_surface_proximal_points(pred_mesh, n_points=CD_RES, jitter_sigma=0.0)
+        pred_points = th.from_numpy(pred_points).float().to(sketcher_3d.device)
 
-    # Bi directonal Surface Iou
-    stats["bi_directional_surface_iou"] = (stats["iou_gt_surface_proximal"] + stats["iou_pred_surface_proximal"]) / 2.0
-    print(f"bi_directional_surface_iou: {stats['bi_directional_surface_iou']}")
-    
-    surface_samples = sample_surface_proximal_points(input_mesh, n_points=AlgConf.N_SURFACE_POINTS_EVAL, jitter_sigma=0.0)
-    surface_samples = th.from_numpy(surface_samples).float().to(sketcher_3d.device)
-    surface_sdf, _  = get_sdf_and_gradients(surface_samples, pred_mesh, sketcher_3d)
-    mean_delta = th.mean(th.abs(surface_sdf))
-    stats["mean_sdf_delta"] = mean_delta.item()
-    print(f"mean_sdf_delta: {stats['mean_sdf_delta']}")
-
-    surface_samples_cd = sample_surface_proximal_points(input_mesh, n_points=CD_RES, jitter_sigma=0.0)
-    surface_samples_cd = th.from_numpy(surface_samples_cd).float().to(sketcher_3d.device)
-    # How do I get points on my surface?
-    # use 512 size program and onion... and farthest point sampling.
-    pred_points = sample_surface_proximal_points(pred_mesh, n_points=CD_RES, jitter_sigma=0.0)
-    pred_points = th.from_numpy(pred_points).float().to(sketcher_3d.device)
-
-    # CD 
-    cd = th.cdist(pred_points, surface_samples_cd, p=2) ** 2
+        # CD 
+        cd = th.cdist(pred_points, surface_samples_cd, p=2) ** 2
 
 
 
-    cd_1 = th.min(cd, dim=1)[0]
-    cd_2 = th.min(cd, dim=0)[0] 
-    cd_1_mean = th.mean(cd_1)
-    cd_2_mean = th.mean(cd_2)
-    cd_avg = (th.mean(cd_1) + th.mean(cd_2)) / 2.0
-    stats[f"CD_1_MEAN@{CD_RES}"] = cd_1_mean.item() * CD_MULTIPLIER
-    stats[f"CD_2_MEAN@{CD_RES}"] = cd_2_mean.item() * CD_MULTIPLIER
-    stats[f"CD_AVG@{CD_RES}"] = cd_avg.item() * CD_MULTIPLIER
-    print(f"CD_1_MEAN@{CD_RES}: {stats[f'CD_1_MEAN@{CD_RES}']}")
-    print(f"CD_2_MEAN@{CD_RES}: {stats[f'CD_2_MEAN@{CD_RES}']}")
-    print(f"CD_AVG@{CD_RES}: {stats[f'CD_AVG@{CD_RES}']}")
-    
+        cd_1 = th.min(cd, dim=1)[0]
+        cd_2 = th.min(cd, dim=0)[0] 
+        cd_1_mean = th.mean(cd_1)
+        cd_2_mean = th.mean(cd_2)
+        cd_avg = (th.mean(cd_1) + th.mean(cd_2)) / 2.0
+        cd_1_val = cd_1_mean.item() * CD_MULTIPLIER
+        cd_2_val = cd_2_mean.item() * CD_MULTIPLIER
+        cd_avg_val = cd_avg.item() * CD_MULTIPLIER
+        Stats.record(f"CD_1_MEAN@{CD_RES}", cd_1_val)
+        Stats.record(f"CD_2_MEAN@{CD_RES}", cd_2_val)
+        Stats.record(f"CD_AVG@{CD_RES}", cd_avg_val)
+        
 
-    hd1 = th.quantile(cd_1, 0.95, dim=-1)
-    hd2 = th.quantile(cd_2, 0.95, dim=-1)
-    iqr_hd = (hd1 + hd2) / 2.0
-    stats["iqr_hausdorff"] = iqr_hd.item()
-    print(f"iqr_hausdorff: {stats['iqr_hausdorff']}")
+        hd1 = th.quantile(cd_1, 0.95, dim=-1)
+        hd2 = th.quantile(cd_2, 0.95, dim=-1)
+        iqr_hd = (hd1 + hd2) / 2.0
+        Stats.record("iqr_hausdorff", iqr_hd.item())
 
-    emd = emd_sinkhorn(pred_points, surface_samples_cd)
-    stats["emd"] = emd.item()
-    print(f"emd: {stats['emd']}")
+        emd = emd_sinkhorn(pred_points, surface_samples_cd)
+        Stats.record("emd", emd.item())
 
 
-    # Overall objective
-    n_prims = n_prims_in_expr(pred_program)
-    stats["n_prims"] = n_prims
-    print(f"n_prims: {stats['n_prims']}")
-    
-    
-    primitives = gather_primitives(pred_program)
-    # number of parameters: 
-    param_cost = get_param_cost(pred_program.sympy())
-    if inp_mode == "PA":
-        param_cost = param_cost - (6 * len(primitives) * 4)
+        # Overall objective
+        n_prims = n_prims_in_expr(pred_program)
+        Stats.record("n_prims", n_prims)
+        
+        
+        primitives = gather_primitives(pred_program)
+        # number of parameters: 
+        param_cost = get_param_cost(pred_program.sympy())
+        if inp_mode == "PA":
+            param_cost = param_cost - (6 * len(primitives) * 4)
 
-        prim_type_cost = len(primitives) * 1 * 1
-    else:
-        prim_type_cost = 0
-    total_param_cost = param_cost + prim_type_cost
-    stats['n_params'] = total_param_cost
-    print(f"n_params: {stats['n_params']}")
+            prim_type_cost = len(primitives) * 1 * 1
+        else:
+            prim_type_cost = 0
+        total_param_cost = param_cost + prim_type_cost
+        Stats.record('n_params', total_param_cost)
 
-    # Compression based on obj
-    orig_mesh = measure_pack.original_mesh
-    orig_cost = orig_mesh.vertices.shape[0] * 3  * 4 + orig_mesh.faces.shape[0] * 3 * 4
-    compression = total_param_cost / orig_cost
-    stats["compression_ratio"] = compression
-    print(f"compression_ratio: {stats['compression_ratio']}")
+        # Compression based on obj
+        orig_mesh = measure_pack.original_mesh
+        orig_cost = orig_mesh.vertices.shape[0] * 3  * 4 + orig_mesh.faces.shape[0] * 3 * 4
+        compression = total_param_cost / orig_cost
+        Stats.record("compression_ratio", compression)
 
-    objective = stats[f"bi_directional_surface_iou"] + measure_pack.len_weight * n_prims
-    stats["objective"] = objective
-    print(f"objective: {stats['objective']}")
-    # ----------- Additional metrics -----------
-    # Overlap Amount - fraction of shape which has some overlap. 
-    prim_exec_sdf = [recursive_evaluate(x.tensor(), sketcher_3d) for x in primitives]
-    prim_exec_sdf = th.stack(prim_exec_sdf, dim=0)
-    prim_execs_occ = (prim_exec_sdf <= 0.0).float()
-    overlap_amount = th.sum(prim_execs_occ, dim=0)
-    overlap_amount = (overlap_amount > 1.0).float().sum() / ((overlap_amount > 0.0).float().sum() + 1e-6)
-    stats["overlap_amount"] = overlap_amount.item()
-    print(f"overlap_amount: {stats['overlap_amount']}")
+        objective = bi_dir_iou + measure_pack.len_weight * n_prims
+        Stats.record("objective", objective)
+        # ----------- Additional metrics -----------
+        # Overlap Amount - fraction of shape which has some overlap. 
+        prim_exec_sdf = [recursive_evaluate(x.tensor(), sketcher_3d) for x in primitives]
+        prim_exec_sdf = th.stack(prim_exec_sdf, dim=0)
+        prim_execs_occ = (prim_exec_sdf <= 0.0).float()
+        overlap_amount = th.sum(prim_execs_occ, dim=0)
+        overlap_amount = (overlap_amount > 1.0).float().sum() / ((overlap_amount > 0.0).float().sum() + 1e-6)
+        Stats.record("overlap_amount", overlap_amount.item())
 
-    #
-    output_sdf = recursive_evaluate(pred_program.tensor(), sketcher_3d)
-    output_occ = (output_sdf <= 0.0).float()
-    prim_exec_union_sdf = th.min(prim_exec_sdf, dim=0)[0]
-    delta_sdf = th.maximum(output_sdf, - prim_exec_union_sdf)
-    delta_occ = (delta_sdf <= 0.0).float()
-    unoverlap_amount = th.sum(delta_occ) / (th.sum(output_occ) + 1e-6)
-    stats["unoverlap_amount"] = unoverlap_amount.item()
-    print(f"unoverlap_amount: {stats['unoverlap_amount']}")
+        #
+        output_sdf = recursive_evaluate(pred_program.tensor(), sketcher_3d)
+        output_occ = (output_sdf <= 0.0).float()
+        prim_exec_union_sdf = th.min(prim_exec_sdf, dim=0)[0]
+        delta_sdf = th.maximum(output_sdf, - prim_exec_union_sdf)
+        delta_occ = (delta_sdf <= 0.0).float()
+        unoverlap_amount = th.sum(delta_occ) / (th.sum(output_occ) + 1e-6)
+        Stats.record("unoverlap_amount", unoverlap_amount.item())
 
-    # partitioning. 
-    sampled_expr = fetch_singular_expr(pred_program.sympy(), relaxed_eval=False)
-    new_expr = recursive_sm_to_smg(sampled_expr.sympy())
-    mat_expr, _ = recursive_gls_to_sysl(new_expr, ind=0, version="v1")
-    outputs = recursive_evaluate_mat_expr(mat_expr.tensor(), sketcher_3d)
-    output_sdf, prim_ids = outputs[..., 0], outputs[..., 1]
-    prim_ids[output_sdf > 0] = -1
+        # partitioning. 
+        sampled_expr = fetch_singular_expr(pred_program.sympy(), relaxed_eval=False)
+        new_expr = recursive_sm_to_smg(sampled_expr.sympy())
+        mat_expr, _ = recursive_gls_to_sysl(new_expr, ind=0, version="v1")
+        outputs = recursive_evaluate_mat_expr(mat_expr.tensor(), sketcher_3d)
+        output_sdf, prim_ids = outputs[..., 0], outputs[..., 1]
+        prim_ids[output_sdf > 0] = -1
 
-    # mask valid primitive voxels
-    valid_mask = prim_ids >= 0
-    active_ids = prim_ids[valid_mask].long()     # only primitives where sdf <= 0
-    if active_ids.numel() == 0:
-        raise ValueError("No active primitives found.")
-    # ---- Count voxels per primitive efficiently ----
-    # bincount works on GPU if active_ids is CUDA and dtype long
-    counts = th.bincount(active_ids)      # shape: [num_primitives], counts[i] = volume of primitive i
-    # total active volume
-    total_active = counts.sum().float()
+        # mask valid primitive voxels
+        valid_mask = prim_ids >= 0
+        active_ids = prim_ids[valid_mask].long()     # only primitives where sdf <= 0
+        if active_ids.numel() == 0:
+            raise ValueError("No active primitives found.")
+        # ---- Count voxels per primitive efficiently ----
+        # bincount works on GPU if active_ids is CUDA and dtype long
+        counts = th.bincount(active_ids)      # shape: [num_primitives], counts[i] = volume of primitive i
+        # total active volume
+        total_active = counts.sum().float()
 
-    vol_percentage = counts /  (total_active + 1e-12) # th.sum(prim_execs_occ, dim=-1) / (th.sum(output_occ) + 1e-6)
-    avg_vol_percentage = th.mean(vol_percentage)
-    stats["avg_vol_percentage"] = avg_vol_percentage.item()
-    print(f"avg_vol_percentage: {stats['avg_vol_percentage']}")
+        vol_percentage = counts /  (total_active + 1e-12) # th.sum(prim_execs_occ, dim=-1) / (th.sum(output_occ) + 1e-6)
+        avg_vol_percentage = th.mean(vol_percentage)
+        Stats.record("avg_vol_percentage", avg_vol_percentage.item())
 
-    max_vol_percentage = th.max(vol_percentage)
-    stats["max_vol_percentage"] = max_vol_percentage.item()
-    print(f"max_vol_percentage: {stats['max_vol_percentage']}")
+        max_vol_percentage = th.max(vol_percentage)
+        Stats.record("max_vol_percentage", max_vol_percentage.item())
 
-    median_vol_percentage = th.median(vol_percentage)
-    stats["median_vol_percentage"] = median_vol_percentage.item()
-    print(f"median_vol_percentage: {stats['median_vol_percentage']}")
-    
+        median_vol_percentage = th.median(vol_percentage)
+        Stats.record("median_vol_percentage", median_vol_percentage.item())
+        
 
-    # coverage ratios per primitive
-    coverage = counts.float() / (total_active + 1e-12)
-    # ---- Sort descending by coverage ----
-    coverage_sorted, _ = th.sort(coverage, descending=True)
-    # ---- Fractional coverage curve ----
-    # cumulative fraction of volume explained as we add more primitives
-    frac_coverage = th.cumsum(coverage_sorted, dim=0) / coverage_sorted.numel()
-    stats["frac_coverage"] = frac_coverage.sum().item()
-    print(f"frac_coverage: {stats['frac_coverage']}")
+        # coverage ratios per primitive
+        coverage = counts.float() / (total_active + 1e-12)
+        # ---- Sort descending by coverage ----
+        coverage_sorted, _ = th.sort(coverage, descending=True)
+        # ---- Fractional coverage curve ----
+        # cumulative fraction of volume explained as we add more primitives
+        frac_coverage = th.cumsum(coverage_sorted, dim=0) / coverage_sorted.numel()
+        Stats.record("frac_coverage", frac_coverage.sum().item())
 
-    jumps = th.diff(frac_coverage)                   # [P-1]
-    avg_jump = jumps.mean()
-    stats["avg_jump"] = avg_jump.item()
-    print(f"avg_jump: {stats['avg_jump']}")
+        jumps = th.diff(frac_coverage)                   # [P-1]
+        avg_jump = jumps.mean()
+        Stats.record("avg_jump", avg_jump.item())
 
-    # get primitive ids on surface points. 
+        # get primitive ids on surface points. 
 
-    surface_samples_inp = sample_surface_proximal_points(input_mesh, n_points=AlgConf.N_SURFACE_POINTS_EVAL, jitter_sigma=0.0)
-    surface_samples_inp = th.from_numpy(surface_samples_inp).float().to(sketcher_3d.device)
-    semantic_loss_holder.load_point_features_GT(surface_samples_inp)
-    point_features = semantic_loss_holder.point_features
-    outputs = recursive_evaluate_mat_expr(mat_expr.tensor(), sketcher_3d, coords=surface_samples_inp)
-    surface_output_sdf, surface_prim_ids = outputs[..., 0], outputs[..., 1]
+        surface_samples_inp = sample_surface_proximal_points(input_mesh, n_points=AlgConf.N_SURFACE_POINTS_EVAL, jitter_sigma=0.0)
+        surface_samples_inp = th.from_numpy(surface_samples_inp).float().to(sketcher_3d.device)
+        semantic_loss_holder.load_point_features_GT(surface_samples_inp)
+        point_features = semantic_loss_holder.point_features
+        outputs = recursive_evaluate_mat_expr(mat_expr.tensor(), sketcher_3d, coords=surface_samples_inp)
+        surface_output_sdf, surface_prim_ids = outputs[..., 0], outputs[..., 1]
 
-    kmeans_res = primitive_semantic_nmi_fast(point_features, surface_prim_ids.long())
-    stats['nmi'] = kmeans_res['nmi']
-    print(f"nmi: {stats['nmi']}")
-    stats['num_feat_clusters'] = kmeans_res['num_feat_clusters']
-    print(f"num_feat_clusters: {stats['num_feat_clusters']}")
+        kmeans_res = primitive_semantic_nmi_fast(point_features, surface_prim_ids.long())
+        Stats.record('nmi', kmeans_res['nmi'])
+        Stats.record('num_feat_clusters', kmeans_res['num_feat_clusters'])
 
-    res = primitive_feature_stats(point_features, surface_prim_ids.long(), k=1)
-    stats['SEM_primitive_purity'] = res['intra_var_weighted'].mean().item()
-    print(f"SEM_primitive_purity: {stats['SEM_primitive_purity']}")
-    stats['SEM_primitive_knn_sep'] = res['knn_sep'].item()
-    print(f"SEM_primitive_knn_sep: {stats['SEM_primitive_knn_sep']}")
-    stats['SEM_inter_avg'] = res['inter_avg'].item()
-    print(f"SEM_inter_avg: {stats['SEM_inter_avg']}")
+        res = primitive_feature_stats(point_features, surface_prim_ids.long(), k=1)
+        Stats.record('SEM_primitive_purity', res['intra_var_weighted'].mean().item())
+        Stats.record('SEM_primitive_knn_sep', res['knn_sep'].item())
+        Stats.record('SEM_inter_avg', res['inter_avg'].item())
 
 
-    # SDF Error rate. 
-    real_sdf = renorm_target_sdf(output_sdf, sketcher_3d) * 2.0
-    sdf_error = th.abs(real_sdf - output_sdf)
-    sdf_error_rate = sdf_error.mean()
-    stats["sdf_error"] = sdf_error_rate.item()
-    print(f"sdf_error: {stats['sdf_error']}")
+        # SDF Error rate. 
+        real_sdf = renorm_target_sdf(output_sdf, sketcher_3d) * 2.0
+        sdf_error = th.abs(real_sdf - output_sdf)
+        sdf_error_rate = sdf_error.mean()
+        Stats.record("sdf_error", sdf_error_rate.item())
 
-    # ALso only outside:
-    outside = (real_sdf > 0.0)
-    outside_sdf_error = sdf_error[outside]
-    outside_sdf_error_rate = outside_sdf_error.mean()
-    stats["outside_sdf_error"] = outside_sdf_error_rate.item()
-    print(f"outside_sdf_error: {stats['outside_sdf_error']}")
-
-    return stats
+        # ALso only outside:
+        outside = (real_sdf > 0.0)
+        outside_sdf_error = sdf_error[outside]
+        outside_sdf_error_rate = outside_sdf_error.mean()
+        Stats.record("outside_sdf_error", outside_sdf_error_rate.item())
 
     # TBD Color
     # Color Matching -> For each point proximal point color.
@@ -284,7 +272,10 @@ def get_param_cost(in_expr):
         else:
             current_cost += len(arg) * 4
     return current_cost
-def get_recon_measure(in_expr, sketcher, measure_pack: MeasurePack):
+    
+def get_recon_measure(in_expr, sketcher, measure_pack: MeasurePack, convert_to_scalar=True):
+    # Reset seeds for evaluation to ensure consistent random sampling
+    reset_eval_seeds()
 
     output_sdf = recursive_evaluate(in_expr.tensor(), sketcher, relaxed_eval=False)
     target_mesh = measure_pack.target_mesh
@@ -392,17 +383,21 @@ def get_recon_measure(in_expr, sketcher, measure_pack: MeasurePack):
         try:
             measure = get_cd_measure(output_sdf, target_pc, sketcher)
         except Exception as e:
-            print(f"Error evaluating CD: {e}")
+            logger.error(f"Error evaluating CD: {e}")
             measure = 0.0
     elif measure == "iqr_hausdorff":
         try:
             measure = get_iqr_hausdorff_measure(output_sdf, target_pc, sketcher)
         except Exception as e:
-            print(f"Error evaluating IQR Hausdorff: {e}")
+            logger.error(f"Error evaluating IQR Hausdorff: {e}")
             measure = 0.0
+    if convert_to_scalar and isinstance(measure, th.Tensor):
+        measure = measure.item()
     return measure
 
 def get_recon_measure_packed(expr_set, sketcher, measure_pack: MeasurePack):
+    # Reset seeds for evaluation to ensure consistent random sampling
+    reset_eval_seeds()
 
     all_execs = []
     target_mesh = measure_pack.target_mesh
@@ -539,7 +534,7 @@ def get_cd_measure_set(output_sdfs, target_pc, sketcher):
             output_pc = th.from_numpy(output_pc).float().to(sketcher.device)
             output_pcs.append(output_pc)
         except Exception as e:
-            print(f"Error evaluating CD: {e}")
+            logger.error(f"Error evaluating CD: {e}")
             output_pcs.append(target_pc * 0.0 + 100)
     output_pcs = th.stack(output_pcs, dim=0)   
     cd = th.cdist(output_pcs, target_pc[None, ...], p=2) ** 2
@@ -559,7 +554,7 @@ def get_iqr_hausdorff_measure_set(output_sdfs, target_pc, sketcher):
             output_pc = th.from_numpy(output_pc).float().to(sketcher.device)
             output_pcs.append(output_pc)
         except Exception as e:
-            print(f"Error evaluating IQR Hausdorff: {e}")
+            logger.error(f"Error evaluating IQR Hausdorff: {e}")
             output_pcs.append(target_pc * 0.0 + 100)
     output_pcs = th.stack(output_pcs, dim=0)
     cd = th.cdist(output_pcs, target_pc[None, ...], p=2)

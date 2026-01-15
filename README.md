@@ -27,3 +27,14 @@ To provide:
     6. Mesh to Solid Fitting. 
 
 5. Eval Code.
+
+# Ablations to try
+
+1. Set 3 possible initializations via probabilistic init. with tied params. 
+2. Set stochastic noise to loss function weighting Dirichlet random scalarization.
+3. Adding noise to gradients. 
+4. Sharpness aware minimization, parameter space noising.
+# Simple: 
+    1. Gradually lowering the noise 
+    2. Bidir. Sampling. 
+    3. 

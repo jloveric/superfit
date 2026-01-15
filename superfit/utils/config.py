@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 
 import dataclasses
+import random
 
 import numpy as np
 import json
@@ -46,11 +47,6 @@ class AlgorithmConfig:
 
     # OPTIM
     OPTIMIZER: str = "ADAM"
-    # OPTIMIZER: str = "adamw"
-    # OPTIMIZER: str = "muon"
-    # OPTIMIZER: str = "lbfgs"
-    # OPTIMIZER: str = "shampoo"
-    # OPTIMIZER: str = "kfac"
     WEIGHT_DECAY: float = 1e-5
     OPT_EPSILON: float = 1e-9
     OPT_LR_RATE: float = 0.01
@@ -128,11 +124,17 @@ class AlgorithmConfig:
     FREEZE_PREV_PRIMS: bool = False
     
     OPT_DTYPE: str = th.float32
-    AOT_ARTIFACT_FILE: str = "../aot/aot_artifact_2.pt"
+    AOT_ARTIFACT_DIR: str = "../aot"
+    AOT_ARTIFACT_FILE: str = None
     SAVE_JIT_CACHE: bool = True
-    OVERWRITE_JIT_CACHE: bool = True
+    OVERWRITE_JIT_CACHE: bool = False
     TorchCompile: bool = True
     FastMode: bool = True
+    
+    # SEED CONFIGURATION
+    RANDOM_SEED: int = 42  # Seed for optimization (set once at start)
+    EVAL_SEED: int = 12345  # Seed for evaluation (reset at start of each eval call)
+    USE_DETERMINISTIC: bool = False  # Enable PyTorch deterministic mode (may impact performance)
     
     @staticmethod
     def save_to_file(file_path):
@@ -203,7 +205,7 @@ def low_cost_mode():
     AlgorithmConfig.RENEW_PTS_ITER: int = 100
     AlgorithmConfig.N_SURFACE_POINTS: int = 100_000
     AlgorithmConfig.TARGET_MODE: str = "dilated"
-    AlgorithmConfig.TARGET_MODE_DILATION: float = 0.1
+    AlgorithmConfig.TARGET_MODE_DILATION: float = 0.2
     AlgorithmConfig.OPT_RESOLUTION: int = 64
 
     # AlgorithmConfig.N_ITERS: int = 350
@@ -218,10 +220,11 @@ def low_cost_mode_v2():
     # AlgorithmConfig.TARGET_MODE_DILATION: float = 0.2
     # AlgorithmConfig.OPT_RESOLUTION: int =64
 
-    AlgorithmConfig.N_ITERS: int = 350
-    AlgorithmConfig.SAT_PATIENCE: int = 100
-    AlgorithmConfig.MAX_ITER: int = 1200
-    AlgorithmConfig.OPT_LR_RATE: float = 0.01
+    # AlgorithmConfig.N_ITERS: int = 250
+    # AlgorithmConfig.SAT_PATIENCE: int = 100
+    # AlgorithmConfig.MAX_ITER: int = 1000
+    # AlgorithmConfig.OPT_LR_RATE: float = 0.02
+    ...
 
 def medium_cost_mode():
     AlgorithmConfig.RENEW_PTS_ITER: int = 100
@@ -246,3 +249,78 @@ def high_cost_mode():
     AlgorithmConfig.N_ITERS: int = 500
     AlgorithmConfig.SAT_PATIENCE: int = 150
     AlgorithmConfig.MAX_ITER: int = 2500
+
+
+def check_config():
+    if AlgorithmConfig.FastMode:
+        assert AlgorithmConfig.PRIM_TYPE == "SuperFrustum"
+
+
+def initialize_seeds(seed: int = None, use_deterministic: bool = None):
+    """
+    Initialize random seeds for optimization (set once at start of optimization).
+    This allows the RNG state to evolve naturally during optimization.
+    
+    Args:
+        seed: Random seed to use. If None, uses AlgorithmConfig.RANDOM_SEED
+        use_deterministic: Whether to enable PyTorch deterministic mode. 
+                          If None, uses AlgorithmConfig.USE_DETERMINISTIC
+    """
+    if seed is None:
+        seed = AlgorithmConfig.RANDOM_SEED
+    if use_deterministic is None:
+        use_deterministic = AlgorithmConfig.USE_DETERMINISTIC
+    
+    # Python random
+    random.seed(seed)
+    
+    # NumPy random
+    np.random.seed(seed)
+    
+    # PyTorch random
+    th.manual_seed(seed)
+    if th.cuda.is_available():
+        th.cuda.manual_seed(seed)
+        th.cuda.manual_seed_all(seed)
+    
+    # PyTorch deterministic mode (if requested)
+    if use_deterministic:
+        th.use_deterministic_algorithms(True)
+        th.backends.cudnn.deterministic = True
+        th.backends.cudnn.benchmark = False
+    
+    return seed
+
+
+def reset_eval_seeds(seed: int = None):
+    """
+    Reset random seeds for evaluation (called at start of each evaluation call).
+    This ensures evaluations always use the same set of randomly sampled points
+    for fair comparison across different models/configs.
+    
+    Args:
+        seed: Random seed to use. If None, uses AlgorithmConfig.EVAL_SEED
+    """
+    if seed is None:
+        seed = AlgorithmConfig.EVAL_SEED
+    
+    # Python random
+    random.seed(seed)
+    
+    # NumPy random
+    np.random.seed(seed)
+    
+    # PyTorch random (reset both CPU and GPU)
+    th.manual_seed(seed)
+    if th.cuda.is_available():
+        th.cuda.manual_seed(seed)
+        th.cuda.manual_seed_all(seed)
+    
+    # Open3D random (if available)
+    try:
+        import open3d as o3d
+        o3d.utility.random.seed(seed)
+    except ImportError:
+        pass
+    
+    return seed

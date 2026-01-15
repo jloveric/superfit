@@ -5,6 +5,7 @@ import torch.nn.functional as F
 from sysl.torch_compute.mat_combinators import sdf_geom_only_smooth_union, sdf_smooth_union
 from .param_conversion import params_from_variables
 from ..utils.config import AlgorithmConfig as AlgConf
+from ..utils.logger import logger
 
 # if partfield is not installed, import the following. 
 try:
@@ -37,9 +38,7 @@ class SemanticLossHolder:
         cfg = setup(args, freeze=False)
         seed_everything(cfg.seed)
 
-        th.manual_seed(0)
-        random.seed(0)
-        np.random.seed(0)
+        # Use config seed for consistency with rest of codebase
         self.model =  CustomModel(cfg, ckpt_path=cfg.continue_ckpt, device="cuda")
         self.use_point_mask = False
 
@@ -87,7 +86,7 @@ class SemanticLossHolder:
             mean_value = self.point_features[point_mask].mean(dim=0)
             if mean_value.isnan().any():
                 if i > 0:
-                    print(f"Mean value is nan for primitive {i}")
+                    logger.warning(f"Mean value is nan for primitive {i}")
                     mean_value = self.point_features[:i-1].mean(dim=0)
                 else:
                     mean_value = th.zeros_like(self.point_features[0])

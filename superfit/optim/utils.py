@@ -3,7 +3,7 @@ import numpy as np
 import cubvh
 import trimesh
 import open3d as o3d
-from ..utils.config import AlgorithmConfig as AlgConf
+from ..utils.config import AlgorithmConfig as AlgConf, reset_eval_seeds
 
 
 def quick_sample_points(mesh, sketcher, n_points=10000):
@@ -168,7 +168,7 @@ def get_mask_scaled_aabb(points: th.Tensor,
     return inside_mask
 
 
-def sample_surface_proximal_points(mesh: trimesh.Trimesh, n_points=10000, jitter_sigma=0.0,  seed: int = 42):
+def sample_surface_proximal_points(mesh: trimesh.Trimesh, n_points=10000, jitter_sigma=0.0):
     """
     Sample points uniformly near the surface of a mesh using Open3D.
 
@@ -176,12 +176,12 @@ def sample_surface_proximal_points(mesh: trimesh.Trimesh, n_points=10000, jitter
         mesh (trimesh.Trimesh): input mesh
         n_points (int): number of points to sample
         jitter_sigma (float): stddev of Gaussian noise to add along normals
+        seed (int): Random seed. If None, uses AlgorithmConfig.EVAL_SEED
 
     Returns:
         (N, 3) numpy array of sampled points
     """
-    np.random.seed(seed)
-    o3d.utility.random.seed(seed)  # Open3D's internal RNG (added in 0.17+)
+    reset_eval_seeds() # Open3D's internal RNG (added in 0.17+)
     # Convert to Open3D format
     o3d_mesh = o3d.geometry.TriangleMesh()
     o3d_mesh.vertices = o3d.utility.Vector3dVector(mesh.vertices)
@@ -201,8 +201,7 @@ def sample_surface_proximal_points(mesh: trimesh.Trimesh, n_points=10000, jitter
     return points
 
 
-def perform_batched_stochastic_precondition(base_coords, i, base_iters):
-    init_val = AlgConf.STOCHASTIC_PRECONDITION_INIT_VAL
+def perform_batched_stochastic_precondition(base_coords, i, base_iters, init_val=AlgConf.STOCHASTIC_PRECONDITION_INIT_VAL):
     final_val = 0
     frac = min(i / (base_iters), 1.0)
     alpha = init_val * (1 - frac) + final_val * frac

@@ -10,7 +10,9 @@ from geolipi.torch_compute.evaluate_expression import recursive_evaluate
 from ..symbolic.utils import inject_temp_param, fetch_singular_expr, gather_primitives
 from .eval import get_recon_measure, get_recon_measure_packed, MeasurePack
 from ..symbolic.utils import gather_instance_dropout_alternatives, gather_smooth_union_ops, generate_from_sm_ops_and_primitives
-from ..utils.config import AlgorithmConfig as AlgConf
+from ..utils.config import AlgorithmConfig as AlgConf, initialize_seeds
+from ..utils.stats import Stats
+from ..utils.logger import logger
 
 MAX_SAMPLING_TRIES = 100
 SAMPLING_PATIENCE = 10
@@ -18,77 +20,70 @@ TEMP_SCALE_FACTOR = 1.5
 MAX_INNER_LOOP_LEAVE_ONE_OUT = 100
 MIN_VOL_LIMIT = 1e-4
 
-def main_pruning_pipeline(in_expr, mesh, target_sdf, sketcher, measure=None):
+def main_pruning_pipeline(in_expr, sketcher, measure_pack):
+    # Initialize seeds for pruning (set once at start)
+    
+    with Stats.scope("pruning"):
+        cur_recon_measure = get_recon_measure(in_expr, sketcher, measure_pack)
+        cur_n_prim = len(gather_primitives(in_expr))
+        cur_obj = cur_recon_measure + measure_pack.len_weight * cur_n_prim
+        Stats.record("init_recon_measure", cur_recon_measure)
+        Stats.record("init_n_prim", cur_n_prim)
+        Stats.record("init_obj", cur_obj)
 
-    measure_pack = MeasurePack(
-        measure=AlgConf.PRUNE_METRIC,
-        target_mesh=mesh,
-        target_sdf=target_sdf,
-        len_weight=AlgConf.MPS_LEN_WEIGHT
-    )
-    stats = {}
-    cur_recon_measure = get_recon_measure(in_expr, sketcher, measure_pack)
-    cur_n_prim = len(gather_primitives(in_expr))
-    cur_obj = cur_recon_measure + measure_pack.len_weight * cur_n_prim
-    print(f"Initial {measure_pack.measure}: {cur_recon_measure}")
-    print(f"Initial OBJ: {cur_obj}")
-    print(f"Initial program size: {cur_n_prim}")
-    stats = {
-        "pruning_initial_recon_measure": cur_recon_measure,
-        "pruning_initial_n_prim": cur_n_prim,
-        "pruning_initial_obj": cur_obj,
-    }
-
-    sel_opt_program, best_recon_measure, best_n_prim, best_obj = sampling_based_pruning(in_expr, sketcher, measure_pack)
-    stats["pruning_sampling_based_recon_measure"] = best_recon_measure
-    stats["pruning_sampling_based_n_prim"] = best_n_prim
-    stats["pruning_sampling_based_obj"] = best_obj
-    sel_opt_program, best_recon_measure, best_n_prim, best_obj = top_down_pruning(sel_opt_program, sketcher, measure_pack)
-    stats["pruning_top_down_recon_measure"] = best_recon_measure
-    stats["pruning_top_down_n_prim"] = best_n_prim
-    stats["pruning_top_down_obj"] = best_obj
-    # sel_opt_program, best_recon_measure, best_n_prim, best_obj = leave_one_out_pruning(opt_program, sketcher_3d, measure_pack)
-    sel_opt_program, best_recon_measure, best_n_prim, best_obj = leave_one_out_greedy_pruning(sel_opt_program, sketcher, measure_pack)
-    stats["pruning_leave_one_out_greedy_recon_measure"] = best_recon_measure
-    stats["pruning_leave_one_out_greedy_n_prim"] = best_n_prim
-    stats["pruning_leave_one_out_greedy_obj"] = best_obj
-    sel_opt_program, best_recon_measure, best_n_prim, best_obj = prune_tiny_parts(sel_opt_program, sketcher, measure_pack)
-    stats["pruning_prune_tiny_parts_recon_measure"] = best_recon_measure
-    stats["pruning_prune_tiny_parts_n_prim"] = best_n_prim
-    stats["pruning_prune_tiny_parts_obj"] = best_obj
-    sel_opt_program, best_recon_measure, best_n_prim, best_obj = prune_tiny_parts_v2(sel_opt_program, sketcher, measure_pack)
-    stats["pruning_prune_tiny_parts_recon_measure"] = best_recon_measure
-    stats["pruning_prune_tiny_parts_n_prim"] = best_n_prim
-    stats["pruning_prune_tiny_parts_obj"] = best_obj
-    # sel_opt_program, best_recon_measure, best_n_prim, best_obj = top_down_pruning_recursive(opt_program, sketcher_3d, measure_pack)
-    # Alternative subtractions:
-    cur_recon_measure = get_recon_measure(sel_opt_program, sketcher, measure_pack)
-    cur_n_prim = len(gather_primitives(sel_opt_program))
-    cur_obj = cur_recon_measure + measure_pack.len_weight * cur_n_prim
-    print(f"Final {measure_pack.measure}: {cur_recon_measure}")
-    print(f"Final OBJ: {cur_obj}")
-    print(f"Final program size: {cur_n_prim}")
-    real_measure = measure_pack.measure
-    measure_pack.measure = "iou"
-    cur_iou = get_recon_measure(sel_opt_program, sketcher, measure_pack)
-    best_obj = cur_recon_measure + measure_pack.len_weight * cur_n_prim
-    measure_pack.measure = real_measure
-    stats["best_iou"] = cur_iou
-    stats["best_recon_measure"] = cur_recon_measure
-    stats["best_n_prim"] = cur_n_prim
-    stats["best_obj"] = best_obj
-    return sel_opt_program, stats
+        sel_opt_program, best_recon_measure, best_n_prim, best_obj = sampling_based_pruning(in_expr, sketcher, measure_pack)
+        Stats.record("sampling_based_recon_measure", best_recon_measure)
+        Stats.record("sampling_based_n_prim", best_n_prim)
+        Stats.record("sampling_based_obj", best_obj)
+        
+        sel_opt_program, best_recon_measure, best_n_prim, best_obj = top_down_pruning(sel_opt_program, sketcher, measure_pack)
+        Stats.record("top_down_recon_measure", best_recon_measure)
+        Stats.record("top_down_n_prim", best_n_prim)
+        Stats.record("top_down_obj", best_obj)
+        
+        sel_opt_program, best_recon_measure, best_n_prim, best_obj = leave_one_out_greedy_pruning(sel_opt_program, sketcher, measure_pack)
+        Stats.record("leave_one_out_greedy_recon_measure", best_recon_measure)
+        Stats.record("leave_one_out_greedy_n_prim", best_n_prim)
+        Stats.record("leave_one_out_greedy_obj", best_obj)
+        
+        sel_opt_program, best_recon_measure, best_n_prim, best_obj = prune_tiny_parts(sel_opt_program, sketcher, measure_pack)
+        Stats.record("prune_tiny_parts_recon_measure", best_recon_measure)
+        Stats.record("prune_tiny_parts_n_prim", best_n_prim)
+        Stats.record("prune_tiny_parts_obj", best_obj)
+        
+        sel_opt_program, best_recon_measure, best_n_prim, best_obj = prune_tiny_parts_v2(sel_opt_program, sketcher, measure_pack)
+        Stats.record("prune_tiny_parts_v2_recon_measure", best_recon_measure)
+        Stats.record("prune_tiny_parts_v2_n_prim", best_n_prim)
+        Stats.record("prune_tiny_parts_v2_obj", best_obj)
+        
+        cur_recon_measure = get_recon_measure(sel_opt_program, sketcher, measure_pack)
+        cur_n_prim = len(gather_primitives(sel_opt_program))
+        cur_obj = cur_recon_measure + measure_pack.len_weight * cur_n_prim
+        logger.info(f"Final {measure_pack.measure}: {cur_recon_measure:.6f}")
+        logger.info(f"Final OBJ: {cur_obj:.6f}")
+        logger.info(f"Final program size: {cur_n_prim}")
+        real_measure = measure_pack.measure
+        measure_pack.measure = "iou"
+        cur_iou = get_recon_measure(sel_opt_program, sketcher, measure_pack)
+        best_obj = cur_recon_measure + measure_pack.len_weight * cur_n_prim
+        measure_pack.measure = real_measure
+        Stats.record("best_iou", cur_iou)
+        Stats.record("best_recon_measure", cur_recon_measure)
+        Stats.record("best_n_prim", cur_n_prim)
+        Stats.record("best_obj", best_obj)
+    
+    return sel_opt_program
     
 
 def sampling_based_pruning(in_expr, sketcher, measure_pack, n_samples=100):
     
-    print("==== Sampling based pruning ====")
+    logger.info("==== Sampling based pruning ====")
     cur_recon_measure = get_recon_measure(in_expr, sketcher, measure_pack)
     cur_n_prim = len(gather_primitives(in_expr))
     cur_obj = cur_recon_measure + measure_pack.len_weight * cur_n_prim
-    print(f"Initial {measure_pack.measure}: {cur_recon_measure}")
-    print(f"Initial OBJ: {cur_obj}")
-    print(f"Initial program size: {cur_n_prim}")
+    logger.debug(f"Initial {measure_pack.measure}: {cur_recon_measure:.6f}")
+    logger.debug(f"Initial OBJ: {cur_obj:.6f}")
+    logger.debug(f"Initial program size: {cur_n_prim}")
 
     n_tries, patience, temp_scale, prev_n_exprs = 0, 0, 1.0, 0
     stochastic_expr = inject_temp_param(in_expr, (temp_scale,))
@@ -108,14 +103,14 @@ def sampling_based_pruning(in_expr, sketcher, measure_pack, n_samples=100):
         if n_tries > MAX_SAMPLING_TRIES:
             break
     expr_set = list(expr_set)
-    print(f"found {len(expr_set)} unique expressions")
+    logger.debug(f"Found {len(expr_set)} unique expressions")
     # Batch eval:
     recon_measures, n_prims, objs = batch_eval(expr_set, measure_pack, sketcher)
     best_ind = th.argmax(objs)
     best_expr = expr_set[best_ind].tensor()
-    print(f"Best {measure_pack.measure}: {recon_measures[best_ind]}")
-    print(f"Best OBJ: {objs[best_ind]}")
-    print(f"Best program size: {n_prims[best_ind]}")
+    logger.info(f"Best {measure_pack.measure}: {recon_measures[best_ind]:.6f}")
+    logger.info(f"Best OBJ: {objs[best_ind]:.6f}")
+    logger.info(f"Best program size: {n_prims[best_ind]}")
     best_recon_measure = recon_measures[best_ind]
     best_obj = objs[best_ind]
     best_n_prim = n_prims[best_ind]
@@ -123,50 +118,50 @@ def sampling_based_pruning(in_expr, sketcher, measure_pack, n_samples=100):
 
 def top_down_pruning(in_expr, sketcher, measure_pack):
 
-    print("==== Top down pruning ====")
+    logger.info("==== Top down pruning ====")
     cur_recon_measure = get_recon_measure(in_expr, sketcher, measure_pack)
     cur_n_prim = len(gather_primitives(in_expr))
     cur_obj = cur_recon_measure + measure_pack.len_weight * cur_n_prim
-    print(f"Initial {measure_pack.measure}: {cur_recon_measure}")
-    print(f"Initial OBJ: {cur_obj}")
-    print(f"Initial program size: {cur_n_prim}")
+    logger.debug(f"Initial {measure_pack.measure}: {cur_recon_measure:.6f}")
+    logger.debug(f"Initial OBJ: {cur_obj:.6f}")
+    logger.debug(f"Initial program size: {cur_n_prim}")
 
     top_down_alternatives = gather_top_down_alterns(in_expr)
     top_down_alternatives.append(in_expr)
     recon_measures, n_prims, objs = batch_eval(top_down_alternatives, measure_pack, sketcher)
     best_ind = th.argmax(objs)
     best_expr = top_down_alternatives[best_ind].tensor()
-    print(f"Best {measure_pack.measure}: {recon_measures[best_ind]}")
-    print(f"Best OBJ: {objs[best_ind]}")
-    print(f"Best program size: {n_prims[best_ind]}")
+    logger.info(f"Best {measure_pack.measure}: {recon_measures[best_ind]:.6f}")
+    logger.info(f"Best OBJ: {objs[best_ind]:.6f}")
+    logger.info(f"Best program size: {n_prims[best_ind]}")
     best_recon_measure = recon_measures[best_ind]
     best_obj = objs[best_ind]
     best_n_prim = n_prims[best_ind]
     return best_expr, best_recon_measure, best_n_prim, best_obj
 
 def top_down_pruning_recursive(in_expr, sketcher, measure_pack):
-    print("==== Top down pruning recursive ====")
+    logger.info("==== Top down pruning recursive ====")
     cur_recon_measure = get_recon_measure(in_expr, sketcher, measure_pack)
     cur_n_prim = len(gather_primitives(in_expr))
     cur_obj = cur_recon_measure + measure_pack.len_weight * cur_n_prim
-    print(f"Initial {measure_pack.measure}: {cur_recon_measure}")
-    print(f"Initial OBJ: {cur_obj}")
-    print(f"Initial program size: {cur_n_prim}")
+    logger.debug(f"Initial {measure_pack.measure}: {cur_recon_measure:.6f}")
+    logger.debug(f"Initial OBJ: {cur_obj:.6f}")
+    logger.debug(f"Initial program size: {cur_n_prim}")
 
     best_expr, best_recon_measure, best_n_prim, best_obj = __top_down_pruning(in_expr, sketcher, measure_pack)
-    print(f"Best {measure_pack.measure}: {best_recon_measure}")
-    print(f"Best OBJ: {best_obj}")
-    print(f"Best program size: {best_n_prim}")
+    logger.info(f"Best {measure_pack.measure}: {best_recon_measure:.6f}")
+    logger.info(f"Best OBJ: {best_obj:.6f}")
+    logger.info(f"Best program size: {best_n_prim}")
     return best_expr, best_recon_measure, best_n_prim, best_obj
 
 def leave_one_out_pruning(in_expr, sketcher, measure_pack):
-    print("==== Leave one out pruning ====")
+    logger.info("==== Leave one out pruning ====")
     cur_recon_measure = get_recon_measure(in_expr, sketcher, measure_pack)
     cur_n_prim = len(gather_primitives(in_expr))
     cur_obj = cur_recon_measure + measure_pack.len_weight * cur_n_prim
-    print(f"Initial {measure_pack.measure}: {cur_recon_measure}")
-    print(f"Initial OBJ: {cur_obj}")
-    print(f"Initial program size: {cur_n_prim}")
+    logger.debug(f"Initial {measure_pack.measure}: {cur_recon_measure:.6f}")
+    logger.debug(f"Initial OBJ: {cur_obj:.6f}")
+    logger.debug(f"Initial program size: {cur_n_prim}")
 
     # Check which singular ones can be left out.
     # Try all NCN combinations of leaving them out. 
@@ -187,7 +182,7 @@ def leave_one_out_pruning(in_expr, sketcher, measure_pack):
     if len(loo_valids) == 0:
         # Early exit!
         return in_expr, cur_recon_measure, cur_n_prim, cur_obj
-    print(f"==== found {len(loo_valids)} drop options ====")
+    logger.debug(f"==== Found {len(loo_valids)} drop options ====")
 
     n_selects = len(loo_valids)
     best_obj = cur_obj
@@ -195,10 +190,10 @@ def leave_one_out_pruning(in_expr, sketcher, measure_pack):
     best_n_prim = cur_n_prim
     best_expr = in_expr
     while n_selects > 0:
-        print(f"=== Selecting {n_selects} out of {len(loo_valids)} ====")
+        logger.debug(f"=== Selecting {n_selects} out of {len(loo_valids)} ====")
         removal_options = list(itertools.combinations(loo_valids, n_selects))
         if len(removal_options) > MAX_INNER_LOOP_LEAVE_ONE_OUT:
-            print(f"==== Sampling {MAX_INNER_LOOP_LEAVE_ONE_OUT} out of {len(removal_options)} ====")
+            logger.debug(f"==== Sampling {MAX_INNER_LOOP_LEAVE_ONE_OUT} out of {len(removal_options)} ====")
             removal_options = random.sample(removal_options, MAX_INNER_LOOP_LEAVE_ONE_OUT)
         all_exprs = []
         for removal_option in removal_options:
@@ -221,19 +216,19 @@ def leave_one_out_pruning(in_expr, sketcher, measure_pack):
             break
         else:
             n_selects -=1
-    print(f"Best {measure_pack.measure}: {best_recon_measure}")
-    print(f"Best OBJ: {best_obj}")
-    print(f"Best program size: {best_n_prim}")
+    logger.info(f"Best {measure_pack.measure}: {best_recon_measure:.6f}")
+    logger.info(f"Best OBJ: {best_obj:.6f}")
+    logger.info(f"Best program size: {best_n_prim}")
     return best_expr, best_recon_measure, best_n_prim, best_obj
 
 def leave_one_out_greedy_pruning(in_expr, sketcher, measure_pack):
-    print("==== Leave one out greedy pruning ====")
+    logger.info("==== Leave one out greedy pruning ====")
     cur_recon_measure = get_recon_measure(in_expr, sketcher, measure_pack)
     cur_n_prim = len(gather_primitives(in_expr))
     cur_obj = cur_recon_measure + measure_pack.len_weight * cur_n_prim
-    print(f"Initial {measure_pack.measure}: {cur_recon_measure}")
-    print(f"Initial OBJ: {cur_obj}")
-    print(f"Initial program size: {cur_n_prim}")
+    logger.debug(f"Initial {measure_pack.measure}: {cur_recon_measure:.6f}")
+    logger.debug(f"Initial OBJ: {cur_obj:.6f}")
+    logger.debug(f"Initial program size: {cur_n_prim}")
 
     # Check which singular ones can be left out.
     # Try all NCN combinations of leaving them out. 
@@ -243,10 +238,10 @@ def leave_one_out_greedy_pruning(in_expr, sketcher, measure_pack):
     instance_dropout_alternatives = gather_instance_dropout_alternatives(in_expr)
 
     if len(instance_dropout_alternatives) == 0:
-        print("==== No drop options found ====")
+        logger.debug("==== No drop options found ====")
         return in_expr, cur_recon_measure, cur_n_prim, cur_obj
     else:
-        print(f"==== found {len(instance_dropout_alternatives)} drop options ====")
+        logger.debug(f"==== Found {len(instance_dropout_alternatives)} drop options ====")
 
     recon_measures, n_prims, objs = batch_eval(instance_dropout_alternatives, measure_pack, sketcher)
     n_alterns = len(instance_dropout_alternatives)
@@ -257,7 +252,7 @@ def leave_one_out_greedy_pruning(in_expr, sketcher, measure_pack):
     if len(loo_valids) == 0:
         # Early exit!
         return in_expr, cur_recon_measure, cur_n_prim, cur_obj
-    print(f"==== found {len(loo_valids)} drop options ====")
+    logger.debug(f"==== Found {len(loo_valids)} drop options ====")
     try_0_removal = False
     if 0 in loo_valids:
         # Remove it separately?
@@ -287,7 +282,7 @@ def leave_one_out_greedy_pruning(in_expr, sketcher, measure_pack):
         cur_best_expr = all_exprs[cur_best_ind]
         best_option = candidate_removals[cur_best_ind]
         if cur_best_obj >= best_obj:
-            print(f"Best option {best_option} improved from {best_obj} to {cur_best_obj}")
+            logger.debug(f"Best option {best_option} improved from {best_obj:.6f} to {cur_best_obj:.6f}")
             best_expr = cur_best_expr
             best_recon_measure = cur_best_recon_measure
             best_n_prim = cur_best_n_prim
@@ -299,10 +294,10 @@ def leave_one_out_greedy_pruning(in_expr, sketcher, measure_pack):
             #         candidate_removals.remove(candidate_removals[ind])
             additional_removes.append(best_option)
         else:
-            print(f"Best option {best_option} did not improve from {best_obj} to {cur_best_obj}")
+            logger.debug(f"Best option {best_option} did not improve from {best_obj:.6f} to {cur_best_obj:.6f}")
             break
     if try_0_removal:
-        print("==== Trying 0 removal ====")
+        logger.debug("==== Trying 0 removal ====")
         primitives = gather_primitives(best_expr)
         sm_ops = gather_smooth_union_ops(best_expr)
         temp_ops = [x for ind, x in enumerate(sm_ops) if ind != 0]
@@ -313,28 +308,28 @@ def leave_one_out_greedy_pruning(in_expr, sketcher, measure_pack):
         cur_recon_measure = get_recon_measure(temp_expr, sketcher, measure_pack)
         cur_n_prim = len(gather_primitives(temp_expr))
         cur_obj = cur_recon_measure + measure_pack.len_weight * cur_n_prim
-        if best_obj >= best_obj:
-            print(f"0 removal improved from {best_obj} to {cur_obj}")
+        if cur_obj >= best_obj:
+            logger.debug(f"0 removal improved from {best_obj:.6f} to {cur_obj:.6f}")
             best_expr = temp_expr
             best_recon_measure = cur_recon_measure
             best_n_prim = cur_n_prim
             best_obj = cur_obj
         
-    print(f"Best {measure_pack.measure}: {best_recon_measure}")
-    print(f"Best OBJ: {best_obj}")
-    print(f"Best program size: {best_n_prim}")
+    logger.info(f"Best {measure_pack.measure}: {best_recon_measure:.6f}")
+    logger.info(f"Best OBJ: {best_obj:.6f}")
+    logger.info(f"Best program size: {best_n_prim}")
     return best_expr, best_recon_measure, best_n_prim, best_obj
 
 # Alternative - For tiny parts, if Exec(P-A) > 0, or if I(A, T) = 0, then remove A
 def prune_tiny_parts(in_expr, sketcher, measure_pack):
 
-    print("==== Prune Tiny Parts greedy pruning ====")
+    logger.info("==== Prune Tiny Parts greedy pruning ====")
     cur_recon_measure = get_recon_measure(in_expr, sketcher, measure_pack)
     cur_n_prim = len(gather_primitives(in_expr))
     cur_obj = cur_recon_measure + measure_pack.len_weight * cur_n_prim
-    print(f"Initial {measure_pack.measure}: {cur_recon_measure}")
-    print(f"Initial OBJ: {cur_obj}")
-    print(f"Initial program size: {cur_n_prim}")
+    logger.debug(f"Initial {measure_pack.measure}: {cur_recon_measure:.6f}")
+    logger.debug(f"Initial OBJ: {cur_obj:.6f}")
+    logger.debug(f"Initial program size: {cur_n_prim}")
 
     # Check which singular ones can be left out.
     # Try all NCN combinations of leaving them out. 
@@ -355,11 +350,11 @@ def prune_tiny_parts(in_expr, sketcher, measure_pack):
     if 0 in removal_options:
         removal_options.remove(0)
     if len(removal_options) == 0:
-        print("==== No tiny parts found ====")
+        logger.debug("==== No tiny parts found ====")
         # Early exit!
         return in_expr, cur_recon_measure, cur_n_prim, cur_obj
         
-    print(f"==== found {len(removal_options)} drop options ====")
+    logger.debug(f"==== Found {len(removal_options)} drop options ====")
     candidate_removals = [x for x in removal_options]
     best_obj = cur_obj
     best_recon_measure = cur_recon_measure
@@ -383,7 +378,7 @@ def prune_tiny_parts(in_expr, sketcher, measure_pack):
         cur_best_expr = all_exprs[cur_best_ind]
         best_option = candidate_removals[cur_best_ind]
         if cur_best_obj >= best_obj:
-            print(f"Best option {best_option} improved from {best_obj} to {cur_best_obj}")
+            logger.debug(f"Best option {best_option} improved from {best_obj:.6f} to {cur_best_obj:.6f}")
             best_expr = cur_best_expr
             best_recon_measure = cur_best_recon_measure
             best_n_prim = cur_best_n_prim
@@ -394,24 +389,24 @@ def prune_tiny_parts(in_expr, sketcher, measure_pack):
             #     if objs[ind] < best_obj:
             #         candidate_removals.remove(candidate_removals[ind])
         else:
-            print(f"Best option {best_option} did not improve from {best_obj} to {cur_best_obj}")
+            logger.debug(f"Best option {best_option} did not improve from {best_obj:.6f} to {cur_best_obj:.6f}")
             break
-    print(f"Best {measure_pack.measure}: {best_recon_measure}")
-    print(f"Best OBJ: {best_obj}")
-    print(f"Best program size: {best_n_prim}")
+    logger.info(f"Best {measure_pack.measure}: {best_recon_measure:.6f}")
+    logger.info(f"Best OBJ: {best_obj:.6f}")
+    logger.info(f"Best program size: {best_n_prim}")
     return best_expr, best_recon_measure, best_n_prim, best_obj
 
 
 # Alternative - For tiny parts, if I(A, T) = 0, then remove A
 def prune_tiny_parts_v2(in_expr, sketcher, measure_pack):
 
-    print("==== Prune Tiny Parts V2 greedy pruning ====")
+    logger.info("==== Prune Tiny Parts V2 greedy pruning ====")
     cur_recon_measure = get_recon_measure(in_expr, sketcher, measure_pack)
     cur_n_prim = len(gather_primitives(in_expr))
     cur_obj = cur_recon_measure + measure_pack.len_weight * cur_n_prim
-    print(f"Initial {measure_pack.measure}: {cur_recon_measure}")
-    print(f"Initial OBJ: {cur_obj}")
-    print(f"Initial program size: {cur_n_prim}")
+    logger.info(f"Initial {measure_pack.measure}: {cur_recon_measure:.6f}")
+    logger.info(f"Initial OBJ: {cur_obj:.6f}")
+    logger.info(f"Initial program size: {cur_n_prim}")
 
     # Check which singular ones can be left out.
     # Try all NCN combinations of leaving them out. 
@@ -427,24 +422,25 @@ def prune_tiny_parts_v2(in_expr, sketcher, measure_pack):
     all_execs = th.stack(all_execs, dim=0)
     
     all_occs = all_execs <= 0
-    vol = (all_occs).float().sum(dim=1) / (sketcher.resolution ** 3)
+    vol = (all_occs).float().sum(dim=1) # / (sketcher.resolution ** 3)
     # Second condition - I(A, T) = 0
     intersection_measures = th.logical_and(all_occs, measure_pack.target_sdf[None, :] <= 0).float().sum(dim=1)
-
-    vol_removal_options = [ind for ind, x in enumerate(vol) if x < MIN_VOL_LIMIT]
-    intersection_removal_options = [ind for ind, x in enumerate(intersection_measures) if x == 0]
-    removal_options = set(vol_removal_options).intersection(set(intersection_removal_options))
+    # intersection_measures = intersection_measures / (sketcher.resolution ** 3)
+    intersection_measures = intersection_measures / vol
+    # vol_removal_options = [ind for ind, x in enumerate(vol) if x < MIN_VOL_LIMIT]
+    intersection_removal_options = [ind for ind, x in enumerate(intersection_measures) if x < 0.6]
+    removal_options = intersection_removal_options# set(vol_removal_options).intersection(set(intersection_removal_options))
     try_0_removal = False
     if 0 in removal_options:
         try_0_removal = True
         removal_options.remove(0)
     
     if len(removal_options) == 0:
-        print("==== No tiny parts found ====")
+        logger.debug("==== No tiny parts found ====")
         # Early exit!
         return in_expr, cur_recon_measure, cur_n_prim, cur_obj
 
-    print(f"==== found {len(removal_options)} prims to drop ====")
+    logger.debug(f"==== Found {len(removal_options)} prims to drop ====")
     temp_ops = [x for ind, x in enumerate(sm_ops) if ind +1 not in removal_options]
     temp_primitives = [x for ind, x in enumerate(primitives) if ind not in removal_options]
     if try_0_removal and len(temp_ops) > 1:
@@ -454,11 +450,11 @@ def prune_tiny_parts_v2(in_expr, sketcher, measure_pack):
     best_expr = generate_from_sm_ops_and_primitives(temp_ops, temp_primitives)
 
     best_recon_measure = get_recon_measure(best_expr, sketcher, measure_pack)
-    best_n_prim = len(gather_primitives(in_expr))
-    best_obj = cur_recon_measure + measure_pack.len_weight * cur_n_prim
-    print(f"Best {measure_pack.measure}: {best_recon_measure}")
-    print(f"Best OBJ: {best_obj}")
-    print(f"Best program size: {best_n_prim}")
+    best_n_prim = len(gather_primitives(best_expr))
+    best_obj = best_recon_measure + measure_pack.len_weight * best_n_prim
+    logger.info(f"Best {measure_pack.measure}: {best_recon_measure:.6f}")
+    logger.info(f"Best OBJ: {best_obj:.6f}")
+    logger.info(f"Best program size: {best_n_prim}")
     return best_expr, best_recon_measure, best_n_prim, best_obj
 
 
@@ -537,13 +533,13 @@ def batch_eval(expr_set, measure_pack, sketcher):
 
     obj = [x.item() for x in objs]
     best_ind = th.argmax(objs)
-    # print best and worst IOU
-    print(f"Lowest {measure_pack.measure}: {min(recon_measures)}")
-    print(f"Highest {measure_pack.measure}: {max(recon_measures)}")
+    # Log best and worst metrics
+    logger.debug(f"Lowest {measure_pack.measure}: {min(recon_measures):.6f}")
+    logger.debug(f"Highest {measure_pack.measure}: {max(recon_measures):.6f}")
     # length of the program
-    print(f"Lowest program size: {min(n_prims)}")
-    print(f"Highest program size: {max(n_prims)}")
+    logger.debug(f"Lowest program size: {min(n_prims)}")
+    logger.debug(f"Highest program size: {max(n_prims)}")
     # obj
-    print(f"Lowest OBJ: {min(obj)}")
-    print(f"Highest OBJ: {max(obj)}")
+    logger.debug(f"Lowest OBJ: {min(obj):.6f}")
+    logger.debug(f"Highest OBJ: {max(obj):.6f}")
     return recon_measures, n_prims, objs

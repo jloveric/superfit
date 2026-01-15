@@ -5,10 +5,11 @@ import igl
 import trimesh
 from matplotlib import cm
 import torch as th
+from ..utils.logger import logger
 
 
 # ---------- Sampling: uniform (area-weighted) with barycentrics ----------
-def sample_points_uniform_area(V, F, n, vertex_normals=None, seed=None):
+def sample_points_uniform_area(V, F, n, vertex_normals=None):
     """
     Uniformly sample 'n' points on a triangle mesh surface using area weighting.
     Returns:
@@ -18,11 +19,7 @@ def sample_points_uniform_area(V, F, n, vertex_normals=None, seed=None):
       N        : (n,3) normals at samples (bary-interpolated vertex normals if provided,
                  otherwise per-face normals)
     """
-    if seed is not None:
-        rng = np.random.default_rng(seed)
-        rand = rng.random
-    else:
-        rand = np.random.random
+    rand = np.random.random
 
     # face areas and sampling probs
     tri = V[F]                          # (m,3,3)
@@ -225,7 +222,7 @@ def multiscale_curvedness_igl(V, F, sigmas=None, combine='meah'):
     C_scales = []
     for s in sigmas:
         C_s = heat_smooth_scalar_torch(C0, L, M, s)
-        print(f"sigma={s:.3f}, mean={C_s.mean():.3f}, std={C_s.std():.3f}, max={C_s.max():.3f}")
+        logger.debug(f"sigma={s:.3f}, mean={C_s.mean():.3f}, std={C_s.std():.3f}, max={C_s.max():.3f}")
         C_scales.append(C_s)
     # C_scales = [heat_smooth_scalar_igl(C0, L, M, s, ell=ell) for s in sigmas]
 

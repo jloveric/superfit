@@ -5,6 +5,7 @@ import torch as th
 import sys
 from .mesh_sdf import renorm_target_sdf, get_target_cubvh, sdf_to_mesh
 from .constants import MIN_VOLUME_LIMIT
+from .logger import logger
 import cc3d
 
     
@@ -193,7 +194,7 @@ def toy_4kload_and_process_mesh(mesh_file):
 
     # Ensure the mesh is watertight and triangular
     if not mesh.is_watertight:
-        print("Warning: mesh is not watertight")
+        logger.warning("Mesh is not watertight")
 
     # If mesh is not triangulated, force triangulation
     if not mesh.is_winding_consistent:
@@ -210,9 +211,9 @@ def toy_4kload_and_process_mesh(mesh_file):
     # Compute face normals (trimesh lazily computes these)
     face_normals = mesh.face_normals  # triggers computation if needed
 
-    print(f"Loaded mesh: {mesh_file}")
-    print(f"Vertices: {len(mesh.vertices)}")
-    print(f"Faces:    {len(mesh.faces)}")
+    logger.info(f"Loaded mesh: {mesh_file}")
+    logger.info(f"Vertices: {len(mesh.vertices)}")
+    logger.info(f"Faces:    {len(mesh.faces)}")
 
     return mesh
 
@@ -223,7 +224,7 @@ def target_cleanup_v2(target_sdf, sketcher_3d, min_volume_limit=MIN_VOLUME_LIMIT
     labels_out, N = cc3d.connected_components(reshaped_mask, return_N=True, connectivity=6) # free
     # Remove dust. 
     vox_grid_size = np.prod(mesh_shape)
-    print("Found", N, "parts in target")
+    logger.info(f"Found {N} parts in target")
     # Image statistics like voxel counts, bounding boxes, and centroids.
     stats = cc3d.statistics(labels_out)
     volume_measure = [x/vox_grid_size for x in stats['voxel_counts']]
@@ -243,7 +244,7 @@ def target_cleanup_v2(target_sdf, sketcher_3d, min_volume_limit=MIN_VOLUME_LIMIT
     reject_mask = label_mask[reshaped_labels_out]   # (N,) bool mask (no broadcast)
 
     pos_target[reject_mask] = 1.0
-    print(f"rejecting {len(reject_index)} parts by volume fraction")
+    logger.info(f"Rejecting {len(reject_index)} parts by volume fraction")
     # for ind in reject_index:
     #     # we need to find nhbd sign. 
     #     pos_target[reshaped_labels_out==ind] = 1.0
@@ -256,7 +257,7 @@ def target_cleanup_v2(target_sdf, sketcher_3d, min_volume_limit=MIN_VOLUME_LIMIT
     labels_out, N = cc3d.connected_components(reshaped_mask, return_N=True, connectivity=6) # free
     # Remove dust. 
     vox_grid_size = np.prod(mesh_shape)
-    print("Found", N, "parts in target")
+    logger.info(f"Found {N} parts in target")
     # Image statistics like voxel counts, bounding boxes, and centroids.
     stats = cc3d.statistics(labels_out)
     volume_measure = [x/vox_grid_size for x in stats['voxel_counts']]
@@ -275,7 +276,7 @@ def target_cleanup_v2(target_sdf, sketcher_3d, min_volume_limit=MIN_VOLUME_LIMIT
     reject_mask = label_mask[reshaped_labels_out]   # (N,) bool mask (no broadcast)
 
     flipped_sdf[reject_mask] = 1.0
-    print(f"rejecting {len(reject_index)} parts by volume fraction")
+    logger.info(f"Rejecting {len(reject_index)} parts by volume fraction")
     # reshaped_labels_out = labels_out.reshape(-1)
     # print("rejecting", reject_index)
     # for ind in reject_index:

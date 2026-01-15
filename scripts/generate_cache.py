@@ -5,6 +5,7 @@ import torch as th
 import superfit.symbolic as sps
 import torch._dynamo as dynamo
 from superfit.utils.config import AlgorithmConfig as AlgConf
+from superfit.utils.logger import logger
 # from .fast_opt import run_optimization_loop
 from geolipi.torch_compute.unroll_expression import unroll_expression
 # from ..torch_compute.triton_convert import batched_sf_packed_stochastic_eval, _sdf_smooth_union_pair
@@ -17,9 +18,9 @@ def compile_program():
     dtype = AlgConf.OPT_DTYPE
     device = "cuda"
     for BATCH_SIZE in range(2, 100):
-        print("================================================")
-        print(f"Generating Cache for Batch size: {BATCH_SIZE}")
-        print("================================================")
+        logger.info("================================================")
+        logger.info(f"Generating Cache for Batch size: {BATCH_SIZE}")
+        logger.info("================================================")
         
         prim_function = batched_sf_packed_stochastic_eval
         PC_SIZE = 200_000 + 128 ** 3
@@ -52,7 +53,7 @@ def compile_program():
         loss = res1.sum() + res2.sum()
         loss.backward()
         real_artifact_file = artifact_file.replace(".pt", f"_{BATCH_SIZE}.pt")
-        print(f"Saving artifacts to {real_artifact_file}")
+        logger.info(f"Saving artifacts to {real_artifact_file}")
         artifacts = th.compiler.save_cache_artifacts()
         assert artifacts is not None
         artifact_bytes, cache_info = artifacts

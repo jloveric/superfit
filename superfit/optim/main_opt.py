@@ -8,6 +8,8 @@ import cubvh
 from .param_conversion import params_from_variables
 from ..symbolic.utils import gather_primitives
 from ..utils.config import AlgorithmConfig as AlgConf
+from ..utils.logger import logger
+from ..utils.stats import Stats
 from .utils import (quick_sample_points, exponential_temperature_schedule, 
                     recompute_sdf_from_BVH, get_mask_scaled_aabb)
 from .curvature import get_points_and_weights
@@ -67,7 +69,7 @@ def run_optimization_loop(init_opt_program, target_mesh, target, sketcher,
     st = time.time()
     # target = get_target_cubvh(target_mesh, sketcher, mode="watertight")
     # target = renorm_target_sdf(target, sketcher)
-    print("Processing targets", time.time() - st)
+    logger.debug(f"Processing targets: {time.time() - st:.3f}s")
     
 
     hard_target = (target <= 0)
@@ -110,13 +112,13 @@ def run_optimization_loop(init_opt_program, target_mesh, target, sketcher,
     base_coords = sketcher.get_base_coords()
     base_coords = base_coords.unsqueeze(0).expand(1, base_coords.shape[0], base_coords.shape[1])
 
-    print("creating BVH", time.time() - st)
+    logger.debug(f"Creating BVH: {time.time() - st:.3f}s")
     if target_mask is not None:
         base_coords = base_coords[:, target_mask, :]
 
 
     ##  ----- OPTIM -- 
-    print("Starting optimization loop")
+    logger.info("Starting optimization loop")
     optim = make_optimizer(param_groups)
     start_time = time.time()
     
@@ -172,7 +174,7 @@ def run_optimization_loop(init_opt_program, target_mesh, target, sketcher,
         output_sdf = output_sdf[0]
         mask = (output_sdf<= AlgConf.LOSS_BAND).float()
         if not mask.sum() > 0:
-            print("No valid points")
+            logger.warning("No valid points")
             continue
         
         output_shape_sdf = output_sdf[:all_sizes[0]].detach().clone()
@@ -235,28 +237,18 @@ def run_optimization_loop(init_opt_program, target_mesh, target, sketcher,
                     nan_detected = True
                     opt_var.grad[th.isnan(opt_var.grad)] = 0.0
             if nan_detected:
-                print("NAN detected")
+                logger.error("NAN detected")
         # Statistics:
         # if not nan_detected:
         optim.step()
 
-        cur_iter_stats = {}
         with th.no_grad():
             hard_output_shape = (output_shape_sdf <= 0.0)
             hard_output_surface_adj = (output_surface_adj_sdf <= 0.0)
             shape_iou = get_iou(hard_output_shape, hard_target)
             surface_adj_iou = get_iou(hard_output_surface_adj, hard_target_surface_adj)
             sdf_error = th.abs(output_surface_sdf.detach()).mean()
-
-            cur_iter_stats["shape_iou"] = shape_iou.item()
-            cur_iter_stats["shape_occ_loss"] = loss_shape_occ.item()
-            cur_iter_stats["surface_adj_occ_loss"] = loss_surface_adj_occ.item()
-            cur_iter_stats["surface_sdf_loss"] = loss_surface_sdf.item()
-            cur_iter_stats["param_loss"] = param_loss.item()
-            cur_iter_stats["primitive_count_loss"] = primitive_count_loss.item()
-            cur_iter_stats["overlap_loss"] = overlap_loss.item()
-            cur_iter_stats["total_loss"] = total_loss.item()
-            
+             
         # STOPPING DESIGN:
 
         shape_improve =  (shape_iou > best_shape_iou + AlgConf.MIN_IMPROVEMENT)
@@ -270,7 +262,11 @@ def run_optimization_loop(init_opt_program, target_mesh, target, sketcher,
             best_shape_iou = shape_iou
             
         if shape_improve or surface_improve:
-            best_stats = {x: y for x, y in cur_iter_stats.items()}
+
+            Stats.record("best_shape_iou", shape_iou.item(), log=False)
+            Stats.record("best_surface_iou", surface_adj_iou.item(), log=False)
+            Stats.record("best_obj", shape_iou.item(), log=False)
+            Stats.record("best_obj", shape_iou.item(), log=False)
             best_obj = shape_iou
             iterations_without_improvement = 0
             
@@ -293,12 +289,12 @@ def run_optimization_loop(init_opt_program, target_mesh, target, sketcher,
             any_stop = stopping_criteria_2 or stopping_criteria_3
             if any_stop and start_temp_decay:
                 # Time to stop:
-                print("===========Stopping due to stopping criteria===========")
-                print(f"cur_iter: {i}, iter_limit: {iter_limit}, max_iter: {max_iter}")
-                print(f"iterations_without_improvement: {iterations_without_improvement}, saturation patience: {AlgConf.SAT_PATIENCE}")
+                logger.info("===========Stopping due to stopping criteria===========")
+                logger.info(f"cur_iter: {i}, iter_limit: {iter_limit}, max_iter: {max_iter}")
+                logger.info(f"iterations_without_improvement: {iterations_without_improvement}, saturation patience: {AlgConf.SAT_PATIENCE}")
                 break
             if any_stop and not start_temp_decay:
-                print("===========Starting Temp Decay===========")
+                logger.info("===========Starting Temp Decay===========")
                 start_temp_decay = True
                 decay_start_iter = i
                 iterations_without_improvement = 0
@@ -306,7 +302,7 @@ def run_optimization_loop(init_opt_program, target_mesh, target, sketcher,
                 iter_limit = i + base_iters
                 max_iter = max(iter_limit, AlgConf.MAX_ITER)
                 
-                print(f"---- new max_iter: {max_iter}, new iter_limit: {iter_limit}  ----")
+                logger.info(f"---- new max_iter: {max_iter}, new iter_limit: {iter_limit}  ----")
 
         
         i += 1
@@ -316,14 +312,14 @@ def run_optimization_loop(init_opt_program, target_mesh, target, sketcher,
         if i % AlgConf.LOG_FREQUENCY == 0:
             cur_time = time.time()
             iteration_rate = (cur_time - start_time) / (i + 1)
-            print(f"Iteration rate: {iteration_rate:.3f} seconds per iteration")
-            print(f"Iteration {i}, Shape IOU: {shape_iou.item():.3f} | Surface Adj IOU: {surface_adj_iou.item():.3f} | Surface SDF Error: {sdf_error.item():.5f}")
-            print(f"Total Loss: {total_loss.item():.5f} | Temperature: {temperature.item():.3f} | Scale Factor: {scale_factor:.3f}")
-            print(f"Loss Shape Occ: {loss_shape_occ.item():.5f} |  Loss SurfaceAdj OCC: {loss_surface_adj_occ.item():.5f} | Loss Surface Adj SDF: {loss_surface_sdf.item():.5f}")
-            print(f"Loss Overlap: {overlap_loss.item():.5f} | Loss Shape Unoverlap: {shape_unoverlap_loss.item():.5f}")
-            print(f"Loss Param: {param_loss.item():.5f} | Loss Primitive Count: {primitive_count_loss.item():.5f} | N Prims: {n_prims}")
-            print(f"Iterations without improvement: {iterations_without_improvement}, new_iou: {shape_iou.item():.3f}, best_iou: {best_shape_iou.item():.3f} | new_surface_iou: {surface_adj_iou.item():.3f}, best_surface_iou: {best_surface_iou.item():.3f}")
-    print(f"Optimization stopped after {i} iterations - iterations_without_improvement {iterations_without_improvement}")
+            logger.info(f"Iteration rate: {iteration_rate:.3f} seconds per iteration")
+            logger.info(f"Iteration {i}, Shape IOU: {shape_iou.item():.3f} | Surface Adj IOU: {surface_adj_iou.item():.3f} | Surface SDF Error: {sdf_error.item():.5f}")
+            logger.info(f"Total Loss: {total_loss.item():.5f} | Temperature: {temperature.item():.3f} | Scale Factor: {scale_factor:.3f}")
+            logger.info(f"Loss Shape Occ: {loss_shape_occ.item():.5f} |  Loss SurfaceAdj OCC: {loss_surface_adj_occ.item():.5f} | Loss Surface Adj SDF: {loss_surface_sdf.item():.5f}")
+            logger.info(f"Loss Overlap: {overlap_loss.item():.5f} | Loss Shape Unoverlap: {shape_unoverlap_loss.item():.5f}")
+            logger.info(f"Loss Param: {param_loss.item():.5f} | Loss Primitive Count: {primitive_count_loss.item():.5f} | N Prims: {n_prims}")
+            logger.debug(f"Iterations without improvement: {iterations_without_improvement}, new_iou: {shape_iou.item():.3f}, best_iou: {best_shape_iou.item():.3f} | new_surface_iou: {surface_adj_iou.item():.3f}, best_surface_iou: {best_surface_iou.item():.3f}")
+    logger.info(f"Optimization stopped after {i} iterations - iterations_without_improvement {iterations_without_improvement}")
 
     # Final results
     if best_params is None:
@@ -331,7 +327,10 @@ def run_optimization_loop(init_opt_program, target_mesh, target, sketcher,
     else:
         best_program = opt_program.inject_tensor_list(best_params)
     
-    return best_program, best_stats
+    Stats.record("n_iters", i)
+    Stats.record("iterations_without_improvement", iterations_without_improvement)
+    
+    return best_program
 
 
 def perform_batched_stochastic_precondition(base_coords, i, base_iters):
@@ -426,10 +425,10 @@ def make_optimizer(param_groups):
     wd = AlgConf.WEIGHT_DECAY
 
     if name == "ADAM":
-        print(f"[Optimizer] Using {name} (lr={lr}, weight_decay={0.0})")
+        logger.info(f"[Optimizer] Using {name} (lr={lr}, weight_decay={0.0})")
         optim = th.optim.Adam(param_groups, lr=lr)
     elif name == "ADAMW":
-        print(f"[Optimizer] Using {name} (lr={lr}, weight_decay={wd})")
+        logger.info(f"[Optimizer] Using {name} (lr={lr}, weight_decay={wd})")
         optim = th.optim.AdamW(param_groups, lr=lr, weight_decay=wd)
     else:
         raise ValueError(f"Unknown optimizer type: {name}")
@@ -452,7 +451,7 @@ def get_full_loss(compiled_func_relaxed, all_coords, transformed_params,
     # mask = (th.abs(output_sdf)<= AlgConf.LOSS_BAND).float()
     mask = (output_sdf<= AlgConf.LOSS_BAND).float()
     if not mask.sum() > 0:
-        print("No valid points")
+        logger.warning("No valid points")
         return loss
     
     output_shape_sdf = output_sdf[:all_sizes[0]].detach().clone()

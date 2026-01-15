@@ -12,6 +12,9 @@ from .losses import compute_total_loss
 from .param_conversion import ntco_packed_var_to_param
 from .utils import perform_batched_stochastic_precondition
 from ..utils.config import AlgorithmConfig as AlgConf
+from ..utils.logger import logger
+
+N_OPT_ITERS = 5
 
 def compile_program_jit(in_program, sketcher, 
             isolated_vars=True,
@@ -21,8 +24,8 @@ def compile_program_jit(in_program, sketcher,
     opt_program, _ = in_program.tensor(dtype=AlgConf.OPT_DTYPE).get_varnamed_expr()
     compiled_func_relaxed, func_def, _ = unroll_expression(opt_program, sketcher, 
         isolated_vars=isolated_vars, param_mode="varlist", relaxed_eval=True)
-    print(ast.unparse(func_def))
-    print(opt_program.sympy().pretty_print())
+    logger.debug(ast.unparse(func_def))
+    logger.debug(opt_program.sympy().pretty_print())
     if torch_compile:
         # JIT compilation is too slow as it has to be done many times!
         compiled_func_relaxed = th.compile(compiled_func_relaxed, mode="reduce-overhead", fullgraph=True)
@@ -35,7 +38,7 @@ class CompiledOps:
 
 
 # Run a dummy Opt function. 
-def compile_with_dummy_opt(in_program, sketcher, 
+def compile_cached_with_dummy_opt(in_program, sketcher, 
             isolated_vars=True,
             torch_compile=False):
     if not torch_compile:
@@ -92,7 +95,7 @@ def compile_with_dummy_opt(in_program, sketcher,
     dtype = arg_0.dtype
     device = arg_0.device
     # Just a rough size estimate.
-    PC_SIZE = 1_000_000
+    PC_SIZE = 2_00_000
     scale_factor = 1.0
     SURF_SIZE = AlgConf.N_SURFACE_POINTS
     BATCH_SIZE = arg_0.shape[0]
@@ -136,7 +139,7 @@ def compile_with_dummy_opt(in_program, sketcher,
 
 
     if os.path.exists(artifact_file):
-        print(f"Loading artifacts from {artifact_file}")
+        logger.info(f"Loading artifacts from {artifact_file}")
         artifact_bytes = th.load(artifact_file)
         th.compiler.load_cache_artifacts(artifact_bytes)
     
@@ -144,7 +147,7 @@ def compile_with_dummy_opt(in_program, sketcher,
     optim = th.optim.Adam(cur_vars, lr=0.00001)
 
 
-    for i in range(10):
+    for i in range(N_OPT_ITERS):
 
         th.compiler.cudagraph_mark_step_begin()
         optim.zero_grad()
@@ -168,16 +171,19 @@ def compile_with_dummy_opt(in_program, sketcher,
         total_loss.backward()
         optim.step()
         end_time = time.time()
-        print(f"Time taken for iteration: {end_time - start_time}")
+        logger.debug(f"Time taken for iteration: {end_time - start_time:.3f}s")
     # assign the compiled functions to an object.
     compiled_ops = CompiledOps(
         compiled_assembly_execution=compiled_assembly_execution,
         compiled_loss_function=compiled_loss_function,
     )
-    print("Finished compiling with dummy opt")
+    logger.info("Finished compiling with dummy opt")
     if AlgConf.SAVE_JIT_CACHE:
         if not os.path.exists(artifact_file) or AlgConf.OVERWRITE_JIT_CACHE:
-            print(f"Saving artifacts to {artifact_file}")
+            parent_dir = os.path.dirname(artifact_file)
+            if not os.path.exists(parent_dir):
+                os.makedirs(parent_dir, exist_ok=True)
+            logger.info(f"Saving artifacts to {artifact_file}")
             artifacts = th.compiler.save_cache_artifacts()
             assert artifacts is not None
             artifact_bytes, cache_info = artifacts
@@ -197,151 +203,3 @@ def _params_from_variables_fast_sf(tensor_list):
     param = variable
     param_list.append(param)
     return param_list
-
-
-def compile_program_jit_cached(in_program, sketcher, 
-            isolated_vars=True,
-            torch_compile=False):
-    # prim_function = map_to_prim_inner_fn[in_program.__class__]
-    # return batched_sf_packed_stochastic_su_eval
-    prim_function = batched_sf_packed_stochastic_eval
-    comp_func = th.compile(prim_function, 
-        backend="inductor",
-        mode="max-autotune",
-        # mode="max-autotune-no-cudagraphs",
-        dynamic=True,
-        fullgraph=True,
-        # options={"triton.cudagraphs": False},
-    )
-    compiled_su_func = th.compile(_sdf_smooth_union_pair, 
-        backend="inductor",
-        mode="max-autotune",
-        dynamic=True,
-        fullgraph=True,
-        # options={"triton.cudagraphs": False},
-    )
-    
-    # Do the same for compute_loss
-    # compiled_fast_loss = th.compile(compute_total_loss, 
-    #     backend="inductor",
-    #     mode="max-autotune",
-    #     dynamic=True,
-    #     fullgraph=True,
-    #     # options={"triton.cudagraphs": False},
-    # )
-
-
-    arg_0 = in_program.get_arg(0)
-    dtype = arg_0.dtype
-    device = arg_0.device
-    PC_SIZE = 200_000 + 128 ** 3
-    BATCH_SIZE = arg_0.shape[0]
-    temperature = 1.0
-    artifact_file = AlgConf.AOT_ARTIFACT_FILE
-    _coords = th.randn(1, PC_SIZE, 3, dtype=dtype, device=device).clone().detach().requires_grad_(False)
-    _params = th.randn(BATCH_SIZE, 14, dtype=dtype, device=device).clone().detach().requires_grad_(True)
-    _su_vals = th.randn(BATCH_SIZE-1, 1, dtype=dtype, device=device).clone().detach().requires_grad_(True)
-    _logits = th.randn(BATCH_SIZE, 2, dtype=dtype, device=device).clone().detach().requires_grad_(True)
-    _temperature = th.randn(1, dtype=dtype, device=device).clone().detach().requires_grad_(False)
-    
-
-    
-    dynamo.mark_dynamic(_coords, 1)
-    dynamo.mark_dynamic(_params, 0, min=2, max=100)
-    dynamo.mark_dynamic(_logits, 0, min=2, max=100)
-    dynamo.mark_dynamic(_su_vals, 0, min=1, max=99)
-    # if os.path.exists(artifact_file):
-    #     print(f"Loading artifacts from {artifact_file}")
-    #     artifact_bytes = th.load(artifact_file)
-    #     th.compiler.load_cache_artifacts(artifact_bytes)
-
-    def compiled_function(coords, params, su_vals, logits, temperature): 
-        output = comp_func(coords, params, logits, temperature)
-        K = output.shape[0]
-
-        out = output[0]
-        for i in range(1, K):
-            k_reshaped = su_vals[i-1].unsqueeze(-1)
-            out = compiled_su_func(out, output[i], k_reshaped)
-        
-        return (output, out)
-    start_time = time.time()
-    for i in range(10):
-        res = compiled_function(_coords, _params, _su_vals, _logits, _temperature)
-        # out = compiled_su_func(res[0], res[1], _su_vals[0:1])
-        # out = compiled_su_func(out, res[2], _su_vals[1:2])
-        out = res[0].sum() + res[1].sum()
-        loss = out.sum()
-        loss.backward()
-
-    end_time = time.time()
-    print(f"Time taken for compilation: {end_time - start_time}")
-
-    # print(f"Saving artifacts to {artifact_file}")
-    # artifacts = th.compiler.save_cache_artifacts()
-    # assert artifacts is not None
-    # artifact_bytes, cache_info = artifacts
-    # th.save(artifact_bytes, artifact_file)
-    compiled_ops = CompiledOps(
-        compiled_assembly_execution=compiled_function,
-        compiled_loss_function=None,
-    )
-
-    return compiled_ops
-
-
-def compile_program_vv(in_program, sketcher, 
-            isolated_vars=True,
-            torch_compile=False):
-    # prim_function = map_to_prim_inner_fn[in_program.__class__]
-    return batched_sf_packed_stochastic_su_eval
-    arg_0 = in_program.get_arg(0)
-    dtype = arg_0.dtype
-    device = arg_0.device
-    prim_function = batched_sf_packed_stochastic_su_eval
-    PC_SIZE = 200_000 + 128 ** 3
-    BATCH_SIZE = arg_0.shape[0]
-    temperature = 1.0
-    artifact_file = AlgConf.AOT_ARTIFACT_FILE
-    _coords = th.randn(1, PC_SIZE, 3, dtype=dtype, device=device).clone().detach().requires_grad_(False)
-    _params = th.randn(BATCH_SIZE, 14, dtype=dtype, device=device).clone().detach().requires_grad_(True)
-    _su_vals = th.randn(BATCH_SIZE-1, 1, dtype=dtype, device=device).clone().detach().requires_grad_(True)
-    _logits = th.randn(BATCH_SIZE, 2, dtype=dtype, device=device).clone().detach().requires_grad_(True)
-    _temperature = th.randn(1, dtype=dtype, device=device).clone().detach().requires_grad_(False)
-    
-
-    comp_func = th.compile(prim_function, 
-        backend="inductor",
-        mode="max-autotune",
-        # mode="max-autotune-no-cudagraphs",
-        dynamic=False,
-        fullgraph=True,
-        # options={"triton.cudagraphs": False},
-    )
-    
-    # dynamo.mark_dynamic(_coords, 1)
-    # dynamo.mark_dynamic(_params, 0, min=2, max=100)
-    # dynamo.mark_dynamic(_logits, 0, min=2, max=100)
-    # dynamo.mark_dynamic(_su_vals, 0, min=1, max=99)
-    real_artifact_file = artifact_file.replace(".pt", f"_{BATCH_SIZE}.pt")
-    if os.path.exists(real_artifact_file):
-        print(f"Loading artifacts from {real_artifact_file}")
-        artifact_bytes = th.load(real_artifact_file)
-        th.compiler.load_cache_artifacts(artifact_bytes)
-
-    start_time = time.time()
-    res1, res2 = comp_func(_coords, _params, _su_vals, _logits, _temperature)
-    loss = res1.sum() + res2.sum()
-    loss.backward()
-
-    end_time = time.time()
-    print(f"Time taken for compilation: {end_time - start_time}")
-
-    # if not os.path.exists(artifact_file):
-    #     print(f"Saving artifacts to {artifact_file}")
-    #     artifacts = th.compiler.save_cache_artifacts()
-    #     assert artifacts is not None
-    #     artifact_bytes, cache_info = artifacts
-    #     th.save(artifact_bytes, artifact_file)
-
-    return comp_func

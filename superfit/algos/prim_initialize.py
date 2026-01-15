@@ -5,6 +5,7 @@ from superfit.utils.mesh_sdf import sdf_to_mesh
 import geolipi.symbolic as gls
 import superfit.symbolic as sps
 from superfit.utils.config import AlgorithmConfig as AlgConf
+from superfit.utils.logger import logger
 from superfit.symbolic.base import inject_stochastic_prim
 
 # =============================================================================
@@ -171,18 +172,18 @@ def choose_extrusion_axis_from_mesh_v1(mesh, nbins=DEFAULT_NBINS_MESH, n_samples
 
     # --- sample points from mesh surface ---
     pts, _ = mesh.sample(n_samples, return_index=True)   # trimesh API
-    pts = th.from_numpy(pts).float().to(device)
+    pts = th.from_numpy(pts.copy()).float().to(device)
     pts -= pts.mean(dim=0, keepdim=True)
 
     # --- candidate directions: PCA + normal covariance ---
-    verts = th.from_numpy(mesh.vertices).float().to(device)
+    verts = th.from_numpy(mesh.vertices.copy()).float().to(device)
     verts -= verts.mean(dim=0)
     cov_v = verts.T @ verts
     _, V = th.linalg.eigh(cov_v)
     cand_dirs = [V[:, i] / V[:, i].norm() for i in range(3)]
 
-    normals = th.from_numpy(mesh.face_normals).float().to(device)
-    areas = th.from_numpy(mesh.area_faces).float().to(device)
+    normals = th.from_numpy(mesh.face_normals.copy()).float().to(device)
+    areas = th.from_numpy(mesh.area_faces.copy()).float().to(device)
     M = (normals.T * areas).T
     cov_n = M.T @ M
     evals_n, evecs_n = th.linalg.eigh(cov_n)
@@ -227,7 +228,7 @@ def choose_extrusion_axis_from_mesh_v1(mesh, nbins=DEFAULT_NBINS_MESH, n_samples
             elong = (t.max() - t.min()) / (cross_radius + 1e-6)
             score = 1.0 * stability  + 0.1 * elong + 1.0 * circularity
             
-            print(f"stability: {stability.item()}, elong: {elong.item()}, circularity: {circularity.item()}")
+            logger.debug(f"stability: {stability.item():.6f}, elong: {elong.item():.6f}, circularity: {circularity.item():.6f}")
             scores[f"cand_{k}"] = score.item()
         scores[f"cand_{k}"] = float(score.item())
 
@@ -413,7 +414,7 @@ def generate_prim_initializations(
                 n_tries += 1
             if P.shape[0] < min_required_pts:
                 if verbose:
-                    print(f"No valid points for primitive {i} despite fixes")
+                    logger.warning(f"No valid points for primitive {i} despite fixes")
                 continue
 
         # --- PCA frame & centered points ---
@@ -430,14 +431,14 @@ def generate_prim_initializations(
                 mesh, version=axis_selection_version
             )
             if verbose:
-                print("Axis scores:", scores)
+                logger.debug(f"Axis scores: {scores}")
             if (z_dir_m is not None) and (not th.isnan(z_dir_m).any()) and (z_dir_m.norm() >= eps6):
                 z_dir_mesh = z_dir_m
         except Exception as e:
             if verbose:
                 import traceback
                 traceback.print_exc()
-                print(f"[warn] Mesh extraction failed for primitive {i}: {e}")
+                logger.warning(f"Mesh extraction failed for primitive {i}: {e}")
 
         if z_dir_mesh is not None:
             z_dir_pca = _safe_normalize(z_dir_mesh.to(device=device, dtype=dtype))
@@ -523,7 +524,7 @@ def generate_prim_initializations(
         taper_amount = th.tensor([taper_amount_val], device=device, dtype=dtype)
 
         if verbose:
-            print(
+            logger.debug(
                 f"[taper] base={base_src}  base_uv=({float(base_u):.4f},{float(base_v):.4f})  "
                 f"top_uv=({float(top_u):.4f},{float(top_v):.4f})  taper={taper_amount_val:.3f}"
             )
@@ -569,7 +570,7 @@ def generate_prim_initializations(
         onion_amount = th.tensor([onion_val], device=device, dtype=dtype)
 
         if verbose:
-            print(
+            logger.debug(
                 f"[onion] band={float(band):.4f} | "
                 f"u-band n={int(mu.sum())} v-band n={int(mv.sum())} | "
                 f"rmin_u={_fmt_num(rmin_u)} rmax_u={_fmt_num(rmax_u)}  "
@@ -614,7 +615,7 @@ def generate_prim_initializations(
 
 
 
-def initialize_neo_prims(prim_params, sketcher, version):
+def initialize_neo_prims(prim_params, sketcher):
     """
     Initialize a primitive given parameters and settings.
     
@@ -632,6 +633,8 @@ def initialize_neo_prims(prim_params, sketcher, version):
         center = prim_params['center']
         rotation = prim_params['rotation']
         scale = prim_params['scale']
+        version = getattr(sps, AlgConf.PRIM_TYPE)
+
         if issubclass(version, (sps.SuperFrustum)):
             taper_amount = prim_params.get("taper", (SCALE_INIT_VAL,))
             onion_amount = prim_params.get("onion_amount", (ONION_INIT_VAL,))
@@ -653,13 +656,13 @@ def initialize_neo_prims(prim_params, sketcher, version):
     return primitive
 
 def get_init_prim_program(primitive_fits, sketcher, init_program=None, 
-                    stochastic_dropout=False, logits_keep_drop=(10.0, -0.0), version="V1"):
+                    logits_keep_drop=(10.0, -0.0)):
     expr = init_program
     # HERE WE WILL ALSO GET Negative - partition them. 
     for prim_parms in primitive_fits:
-        primitive = initialize_neo_prims(prim_parms, sketcher, version)
+        primitive = initialize_neo_prims(prim_parms, sketcher)
         primitive = sps.PrimitiveMarker(primitive)
-        if stochastic_dropout:
+        if AlgConf.STOCHASTIC_DROPOUT:
             primitive = inject_stochastic_prim(primitive, logits_keep_drop)
         if expr is None:
             expr = primitive

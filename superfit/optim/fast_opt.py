@@ -8,6 +8,8 @@ import cubvh
 from .param_conversion import params_from_variables
 from ..symbolic.utils import gather_primitives
 from ..utils.config import AlgorithmConfig as AlgConf
+from ..utils.stats import Stats
+from ..utils.logger import logger
 from .utils import (perform_batched_stochastic_precondition, exponential_temperature_schedule, 
                     recompute_sdf_from_BVH, get_mask_scaled_aabb)
 from .curvature import get_points_and_weights
@@ -38,7 +40,6 @@ def run_optimization_loop_fast(init_opt_program, target_mesh, target, sketcher,
     scale_factors = np.exp(np.arange(start, end, (end-start)/float(AlgConf.N_ITERS))).tolist()
 
     best_params = None
-    best_obj = th.tensor([-1.0], device=device)
     best_shape_iou = th.tensor([-1.0], device=device)
     best_surface_iou = th.tensor([-1.0], device=device)
     iterations_without_improvement = 0
@@ -53,7 +54,7 @@ def run_optimization_loop_fast(init_opt_program, target_mesh, target, sketcher,
 
     ## Process targets:
     st = time.time()
-    print("Processing targets", time.time() - st)
+    logger.debug(f"Processing targets: {time.time() - st:.3f}s")
     
     hard_target = (target <= 0)
     hard_target_fl = hard_target.float()
@@ -82,7 +83,7 @@ def run_optimization_loop_fast(init_opt_program, target_mesh, target, sketcher,
     base_coords = sketcher.get_base_coords()
     base_coords = base_coords.unsqueeze(0).expand(1, base_coords.shape[0], base_coords.shape[1])
 
-    print("creating BVH", time.time() - st)
+    logger.debug(f"Creating BVH: {time.time() - st:.3f}s")
     if target_mask is not None:
         base_coords = base_coords[:, target_mask, :]
 
@@ -90,7 +91,7 @@ def run_optimization_loop_fast(init_opt_program, target_mesh, target, sketcher,
     base_coords_size = base_coords.shape[1]
 
     ##  ----- OPTIM -- 
-    print("Starting optimization loop")
+    logger.info("Starting optimization loop")
     optim = make_optimizer(param_groups)
     start_time = time.time()
     
@@ -105,7 +106,8 @@ def run_optimization_loop_fast(init_opt_program, target_mesh, target, sketcher,
     surface_sampled_points_size = surface_sampled_points.shape[0]
     
     i = 0
-    while (i < 10_000):
+    best_iter = 0
+    while (i >= 0):
 
         ### ITERATION CONFIG
         # optim.zero_grad()
@@ -134,6 +136,7 @@ def run_optimization_loop_fast(init_opt_program, target_mesh, target, sketcher,
             hard_target_surface_adj_fl = hard_target_surface_adj.float()
             # Pre-batch once
             batched_surface_adj_points = surface_adj_points.unsqueeze(0).expand(1, surface_adj_points.shape[0], surface_adj_points.shape[1])
+            # TBD: Add points from Program Surface.
         
         # Concatenate coordinates more efficiently
         # Pre-compute sizes
@@ -155,7 +158,7 @@ def run_optimization_loop_fast(init_opt_program, target_mesh, target, sketcher,
         mask_sum = mask.sum()
         if not mask_sum > 0:
             if i % AlgConf.LOG_FREQUENCY == 0:
-                print("No valid points")
+                logger.warning("No valid points")
             i += 1
             transformed_params = transformed_params[:-1]
             continue
@@ -184,25 +187,18 @@ def run_optimization_loop_fast(init_opt_program, target_mesh, target, sketcher,
 
         ##  LOSSES - optimized computations
         total_loss = compiled_ops.compiled_loss_function(output_shape_occ, hard_target_fl, 
-        # total_loss = compute_total_loss(output_shape_occ, hard_target_fl, 
                                                 output_surface_adj_occ, hard_target_surface_adj_fl, 
                                                 output_surface_sdf,
                                                 primitive_sdfs, output_sdf, 
                                                 mask_shape, mask_surface, mask_surface_adj,
                                                 transformed_params, temperature, 
                                                 scale_factor, curvature_weights)
-        # params = [output_shape_occ, hard_target_fl, output_surface_adj_occ, hard_target_surface_adj_fl, 
-        #                                         output_surface_sdf,
-        #                                         primitive_sdfs, output_sdf, 
-        #                                         mask_shape, mask_surface, mask_surface_adj,
-        #                                         temperature,  curvature_weights]
         total_loss.backward()
         
         optim.step()
 
         # Statistics - only compute when needed
-        should_log = (i % AlgConf.LOG_FREQUENCY == 0)
-        cur_iter_stats = {}
+        log_iter = (i % AlgConf.LOG_FREQUENCY == 0)
         
         with th.no_grad():
             # Only detach for stats computation
@@ -214,10 +210,14 @@ def run_optimization_loop_fast(init_opt_program, target_mesh, target, sketcher,
             hard_output_surface_adj = (output_surface_adj_sdf_detached <= 0.0)
             surface_adj_iou = get_iou(hard_output_surface_adj, hard_target_surface_adj)
             sdf_error = th.abs(output_surface_sdf.detach()).mean()
+            Stats.record("iter_shape_iou", shape_iou.item(), log=False, as_list=True)
+            Stats.record("iter_surface_adj_iou", surface_adj_iou.item(), log=False, as_list=True)
+            Stats.record("iter_total_loss", total_loss.item(), log=False, as_list=True)
 
-            if should_log:
-                cur_iter_stats["shape_iou"] = shape_iou.item()
-                cur_iter_stats["total_loss"] = total_loss.item()
+            if log_iter:
+                logger.info(f"iter_{i} : shape_iou: {shape_iou.item():.3f}")
+                logger.info(f"iter_{i} : surface_adj_iou: {surface_adj_iou.item():.3f}")
+                logger.info(f"iter_{i} : total_loss: {total_loss.item():.5f}")
             
         # STOPPING DESIGN:
         shape_improve = (shape_iou > best_shape_iou + AlgConf.MIN_IMPROVEMENT)
@@ -225,17 +225,17 @@ def run_optimization_loop_fast(init_opt_program, target_mesh, target, sketcher,
 
         act_shape_improve = (shape_iou > best_shape_iou)
         act_surface_improve = (surface_adj_iou > best_surface_iou)
-        
         if surface_improve:
             best_surface_iou = surface_adj_iou
         if shape_improve:
             best_shape_iou = shape_iou
             
         if shape_improve or surface_improve:
-            if should_log:
-                best_stats = {x: y for x, y in cur_iter_stats.items()}
+            if log_iter:
+                logger.info(f"best_shape_iou: {shape_iou.item():.3f}")
+                logger.info(f"best_total_loss: {total_loss.item():.5f}")
             iterations_without_improvement = 0
-            best_obj = shape_iou
+            best_iter = i
         else:
             iterations_without_improvement += 1
 
@@ -253,43 +253,45 @@ def run_optimization_loop_fast(init_opt_program, target_mesh, target, sketcher,
         if stopping_criteria_1:
             any_stop = stopping_criteria_2 or stopping_criteria_3
             if any_stop and start_temp_decay:
-                print("===========Stopping due to stopping criteria===========")
-                print(f"cur_iter: {i}, iter_limit: {iter_limit}, max_iter: {max_iter}")
-                print(f"iterations_without_improvement: {iterations_without_improvement}, saturation patience: {AlgConf.SAT_PATIENCE}")
+                logger.info("===========Stopping due to stopping criteria===========")
+                logger.info(f"cur_iter: {i}, iter_limit: {iter_limit}, max_iter: {max_iter}")
+                logger.info(f"iterations_without_improvement: {iterations_without_improvement}, saturation patience: {AlgConf.SAT_PATIENCE}")
                 break
             if any_stop and not start_temp_decay:
-                print("===========Starting Temp Decay===========")
+                logger.info("===========Starting Temp Decay===========")
                 start_temp_decay = True
                 decay_start_iter = i
                 iterations_without_improvement = 0
                 stochastic_precondition_n_iters = i + stochastic_precondition_n_iters
-                iter_limit = i + base_iters * 2
-                max_iter = max(iter_limit, AlgConf.MAX_ITER)
-                print(f"---- new max_iter: {max_iter}, new iter_limit: {iter_limit}  ----")
+                iter_limit = i + base_iters
+                max_iter = max(i + base_iters * 2.0, AlgConf.MAX_ITER)
+                logger.info(f"---- new max_iter: {max_iter}, new iter_limit: {iter_limit}  ----")
 
         
-        i += 1
         if has_temp:
             transformed_params = transformed_params[:-1]
 
-        if should_log:
+        if log_iter:
             cur_time = time.time()
-            iteration_rate = (cur_time - start_time) / i
-            print(f"Iteration rate: {iteration_rate:.3f} seconds per iteration")
-            print(f"Iteration {i}, Shape IOU: {shape_iou.item():.3f} | Surface Adj IOU: {surface_adj_iou.item():.3f} | Surface SDF Error: {sdf_error.item():.5f}")
-            print(f"Total Loss: {total_loss.item():.5f} | Temperature: {temperature.item():.3f} | Scale Factor: {scale_factor:.3f} | N Prims: {n_prims}")
-            print(f"Iterations without improvement: {iterations_without_improvement}, new_iou: {shape_iou.item():.3f}, best_iou: {best_shape_iou.item():.3f} | new_surface_iou: {surface_adj_iou.item():.3f}, best_surface_iou: {best_surface_iou.item():.3f}")
+            iteration_rate = (cur_time - start_time) / (i + 1e-10)
+            logger.info(f"Iteration rate: {iteration_rate:.3f} seconds per iteration | Best Iter: {best_iter} | Iterations without improvement: {iterations_without_improvement}")
+            logger.info(f"Iteration {i}, Shape IOU: {shape_iou.item():.3f} | Surface Adj IOU: {surface_adj_iou.item():.3f} | Surface SDF Error: {sdf_error.item():.5f}")
+            logger.info(f"Best Shape IOU: {best_shape_iou.item():.3f} | Best Surface Adj IOU: {best_surface_iou.item():.3f}")
+            
+            logger.info(f"Total Loss: {total_loss.item():.5f} | Temperature: {temperature.item():.3f} | Scale Factor: {scale_factor:.3f} | N Prims: {n_prims}")
+        i += 1
     
-    print(f"Optimization stopped after {i} iterations - iterations_without_improvement {iterations_without_improvement}")
+    logger.info(f"Optimization stopped after {i} iterations - iterations_without_improvement {iterations_without_improvement}")
 
     # Final results
     if best_params is None:
         best_program = orig_program.tensor()
-        best_stats = {}
     else:
         best_program = opt_program.inject_tensor_list(best_params)
-        if 'best_stats' not in locals():
-            best_stats = {}
     
-    return best_program, best_stats
+    Stats.record("time_total", time.time() - start_time)
+    Stats.record("n_iters", i)
+    Stats.record("iterations_without_improvement", iterations_without_improvement)
+    
+    return best_program
 

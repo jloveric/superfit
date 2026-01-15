@@ -2,6 +2,7 @@ import numpy as np
 import torch as th
 import fastsweep
 from .constants import USE_CUDA, CLEAN_UP_DELTA, MIN_VOLUME_LIMIT
+from .logger import logger
 import trimesh
 import cubvh
 import cc3d
@@ -74,13 +75,13 @@ def target_cleanup(target_sdf, sketcher_3d, min_volume_limit=MIN_VOLUME_LIMIT):
     labels_out, N = cc3d.connected_components(reshaped_mask, return_N=True, connectivity=6) # free
     # Remove dust. 
     vox_grid_size = np.prod(mesh_shape)
-    print("Found", N, "parts in target")
+    logger.info(f"Found {N} parts in target")
     # Image statistics like voxel counts, bounding boxes, and centroids.
     stats = cc3d.statistics(labels_out)
     volume_measure = [x/vox_grid_size for x in stats['voxel_counts']]
     reject_index = [ind for ind, x in enumerate(volume_measure) if x < min_volume_limit]
     reshaped_labels_out = labels_out.reshape(-1)
-    print(f"rejecting {len(reject_index)} parts by volume fraction")
+    logger.info(f"Rejecting {len(reject_index)} parts by volume fraction")
     for ind in reject_index:
         # we need to find nhbd sign. 
         pos_target[reshaped_labels_out==ind] = 1.0
@@ -93,13 +94,13 @@ def target_cleanup(target_sdf, sketcher_3d, min_volume_limit=MIN_VOLUME_LIMIT):
     labels_out, N = cc3d.connected_components(reshaped_mask, return_N=True, connectivity=6) # free
     # Remove dust. 
     vox_grid_size = np.prod(mesh_shape)
-    print("Found", N, "parts in target")
+    logger.info(f"Found {N} parts in target")
     # Image statistics like voxel counts, bounding boxes, and centroids.
     stats = cc3d.statistics(labels_out)
     volume_measure = [x/vox_grid_size for x in stats['voxel_counts']]
     reject_index = [ind for ind, x in enumerate(volume_measure) if x < min_volume_limit]
     reshaped_labels_out = labels_out.reshape(-1)
-    print("rejecting", reject_index)
+    logger.debug(f"Rejecting indices: {reject_index}")
     for ind in reject_index:
         # we need to find nhbd sign. 
         flipped_sdf[reshaped_labels_out==ind] = 1.0

@@ -5,6 +5,7 @@ import cc3d
 import time
 from superfit.utils.constants import CLEAN_UP_DELTA
 from superfit.utils.mesh_sdf import renorm_target_sdf, clean_up_msd_with_opening
+from superfit.utils.logger import logger
 
 
 def msd_new(target_sdf, sketcher_3d, 
@@ -60,7 +61,6 @@ def filter_by_part_size(cur_target_sdf,
     return selected_parts
 
 
-
 def find_mo_parts(cur_target_sdf, 
                   sketcher_3d, 
                   basic_jump_size, 
@@ -76,7 +76,16 @@ def find_mo_parts(cur_target_sdf,
     shape_size = (cur_target_sdf <= 0).float().sum()
     min_eroded_part_size = shape_size * min_eroded_part_size_ratio
     min_eroded_part_size = int(min_eroded_part_size)
-    for i in range(n_steps_jump + 1):
+
+    # all_vals = th.arange(min_val, min(0.0, min_val + basic_jump_size * n_steps_jump/3.0), basic_jump_size).to(sketcher_3d.device).to(sketcher_3d.dtype)
+    # neg_sdf_vals = cur_target_sdf[cur_target_sdf<=0]
+    # deltas = neg_sdf_vals[None, :] < all_vals[:, None]
+    # deltas = deltas.float().sum(axis=-1)
+    # cond = deltas < min_eroded_part_size
+    # first_false = (~cond).int().argmax().item()
+    first_false = 0
+    logger.info(f"first_false: {first_false}")
+    for i in range(first_false, n_steps_jump + 1):
         cur_threshold = min_val + basic_jump_size * i
         if cur_threshold > 0.0:
             cur_threshold = th.clip(cur_threshold, min=0.0)
@@ -92,7 +101,7 @@ def find_mo_parts(cur_target_sdf,
         valid_primitives = voxel_counts > min_eroded_part_size
         # here for each do a reorg and check: 
         if valid_primitives.sum() > 0:
-            print(f"Valid primitives found at threshold {cur_threshold}, iteration {i}")
+            logger.info(f"Valid primitives found at threshold {cur_threshold:.6f}, iteration {i}")
             labels_out = th.from_numpy(labels_out).to(sketcher_3d.device).long()
             updated_labels = update_labels_by_min_eroded_parts(labels_out, stats, min_eroded_part_size)
             selected_parts = filter_by_part_size(cur_target_sdf, 
@@ -101,7 +110,7 @@ def find_mo_parts(cur_target_sdf,
                      cur_threshold, 
                      min_part_size)
             n_parts = len(selected_parts)
-            print("found", n_parts, "parts after min part size filter")
+            logger.info(f"Found {n_parts} parts after min part size filter")
             if len(selected_parts) > 0:
                 break
 
@@ -142,12 +151,12 @@ def decompose_msd(target_sdf, sketcher_3d,
                                               min_part_size,)
         # Valid parts ->
         n_parts = len(selected_parts)
-        print("found", n_parts, "parts")
+        logger.info(f"Found {n_parts} parts")
         if n_parts == 0:
             break
         
         all_parts.extend(selected_parts)
-        print(f"all_parts: {len(all_parts)}")
+        logger.debug(f"all_parts: {len(all_parts)}")
         # CLEAN UP AND NEXT TARGET CODE.
         indices = [cur_iter for _ in range(n_parts)]
         all_indices.extend(indices)
@@ -158,9 +167,10 @@ def decompose_msd(target_sdf, sketcher_3d,
         cur_target_sdf = renorm_target_sdf(cur_target_sdf, sketcher_3d)
         # opening based cleanup?
         cur_target_sdf = clean_up_msd_with_opening(cur_target_sdf, sketcher_3d, amount=clean_up_delta)
-        print(f"cur_iter: {cur_iter}, n_parts: {len(all_parts)}")
+        logger.debug(f"cur_iter: {cur_iter}, n_parts: {len(all_parts)}")
         cur_iter += 1
-    print(f"===========SeedFitting: Time taken: {time.time() - init_time} ===========")
+    total_time = time.time() - init_time
+    logger.info(f"=========== Decomposition MSD: Time taken: {total_time:.3f}s ===========")
     # Now from these "parts" we must generate initializations for optimization.
     # extend the parts:
     return all_parts, all_indices

@@ -6,23 +6,32 @@ import traceback
 import torch as th
 import numpy as np
 import _pickle as cPickle
+from dataclasses import dataclass
 from geolipi.torch_compute import recursive_evaluate, Sketcher
 from superfit.algos.resfit import resfit
 from superfit.utils.mesh_preprocess import process_mesh_to_sdf
 from superfit.utils.config import AlgorithmConfig as AlgConf
+from superfit.utils.stats import Stats
+from superfit.utils.logger import logger
 import superfit.utils.config as config_options
-
 th.set_float32_matmul_precision("medium")
 th.backends.cudnn.benchmark = True
 
 # Path configuration
 OLD_PATH_PREFIX = "/sensei-fs-3/users/aganeshan/data/toy4k/"
-NEW_PATH_PREFIX = "/media/aditya/OS/data/toys_4k/"
-SAVE_DIR_BASE = "/media/aditya/OS/project_data/project_neo/fastmode_lowcst_2"
+NEW_PATH_PREFIX = "/users/aganesh8/data/aganesh8/data/toys4k_obj_files"
+SAVE_DIR_BASE = "/users/aganesh8/data/aganesh8/projects/project_neo/outputs"
 DEFAULT_CSV_FILE = "test_set_1.csv"
 
 # Hardcoded index list - modify as needed
 INDICES = np.arange(0, 100)  # Example indices, update with your desired indices
+
+@dataclass
+class ProcessArgs:
+    input_mesh_file: str
+    save_dir: str
+    fastmode: bool
+    ablation: int
 
 def main_shape_wise(args):
     #### Set Mode.  
@@ -35,8 +44,37 @@ def main_shape_wise(args):
     else:
         AlgConf.FastMode = False
         AlgConf.TorchCompile = False
+    config_options.low_cost_mode()
+    if args.ablation == 0:
+        pass
+    elif args.ablation == 1:
+        AlgConf.N_SURFACE_POINTS = 150_000
+        AlgConf.OPT_RESOLUTION = 32
+    elif args.ablation == 2:
+        AlgConf.SCALE_FACTOR_START = 13.0
+        AlgConf.N_ITERS = 250
+        AlgConf.SAT_PATIENCE = 100
+        AlgConf.MAX_ITER = 1000
+        AlgConf.OPT_LR_RATE = 0.02
+    elif args.ablation == 3:
+        pass
+    elif args.ablation == 4:
+        AlgConf.N_SURFACE_POINTS = 75_000
+        AlgConf.OPT_RESOLUTION = 32
+    elif args.ablation == 5:
+        AlgConf.N_ITERS = 400
+        AlgConf.SAT_PATIENCE = 100
+        AlgConf.MAX_ITER = 1000
+        AlgConf.OPT_LR_RATE = 0.01
+    elif args.ablation == 6:
+        config_options.low_cost_mode_v2()
+    elif args.ablation == 7:
+        config_options.low_cost_mode_v2()
+        AlgConf.N_SURFACE_POINTS = 50_000
+    
+    AlgConf.AOT_ARTIFACT_FILE = os.path.join(AlgConf.AOT_ARTIFACT_DIR, f"aot_artifact_{args.ablation}.pt")    
+
     # TEST
-    config_options.low_cost_mode_v2()
     failed_indices = []
     if not os.path.exists(save_dir):
         os.makedirs(save_dir, exist_ok=True)
@@ -59,27 +97,23 @@ def main_shape_wise(args):
     min_sdf = target_sdf.min().item()
     max_sdf = target_sdf.max().item()
     if min_sdf <-1.0 or max_sdf > 1.0:
-        print(min_sdf, max_sdf)
+        logger.error(f"Invalid SDF range: min={min_sdf:.6f}, max={max_sdf:.6f}")
         raise ValueError(f"----------- INVALID SDF RANGE -----------")
         # continue
-    start_time = time.time()
-    out_expr, opt_program, stats = resfit(mesh, save_file=save_file_temp)
-    end_time = time.time()
-    part_info = {
-        "out_expr": out_expr.sympy().state(),
-        "opt_program": opt_program.sympy().state(),
-        "time_taken": end_time - start_time,
-    }
-    part_info.update(stats)
-    cPickle.dump(part_info, open(save_file, "wb"))
-    print(f"Saved to {save_file}")
-    print(f"Failed indices: {failed_indices}")
+    Stats.reset()
+    with Stats.timer("resfit_total"):
+        resfit(mesh, save_file=save_file_temp)
+    cPickle.dump(Stats.get_dict(), open(save_file, "wb"))
+    logger.info(f"Saved to {save_file}")
+    if failed_indices:
+        logger.warning(f"Failed indices: {failed_indices}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--csv_file", type=str, default=DEFAULT_CSV_FILE, help="Path to CSV file with mesh paths")
     parser.add_argument("--fastmode", action="store_true", required=False, default=False, help="Enable fastmode")
+    parser.add_argument("--ablation", type=int, default=0, help="Ablation number")
     
     args = parser.parse_args()
     
@@ -103,7 +137,7 @@ if __name__ == "__main__":
     # Process each index in the list
     for idx in INDICES:
         if idx >= len(mesh_cat_and_file_list):
-            print(f"Warning: Index {idx} is out of range (max: {len(mesh_cat_and_file_list) - 1})")
+            logger.warning(f"Index {idx} is out of range (max: {len(mesh_cat_and_file_list) - 1})")
             continue
         
         try:
@@ -117,29 +151,21 @@ if __name__ == "__main__":
             folder_name = os.path.basename(mesh_dir)
             
             # Set save directory
-            save_dir = os.path.join(SAVE_DIR_BASE, folder_name)
+            save_dir = os.path.join(SAVE_DIR_BASE, "ablation", f"ablation_{args.ablation}_v3", folder_name)
             
-            # Create args object
-            class Args:
-                def __init__(self):
-                    self.input_mesh_file = input_mesh_file
-                    self.save_dir = save_dir
-                    self.fastmode = args.fastmode
-            
-            process_args = Args()
-            
-            print(f"Processing index {idx}: {folder_name}")
-            print(f"  Input: {input_mesh_file}")
-            print(f"  Output: {save_dir}")
-            
+            logger.info(f"Processing index {idx}: {folder_name}")
+            logger.info(f"  Input: {input_mesh_file}")
+            logger.info(f"  Output: {save_dir}")
+            args.input_mesh_file = input_mesh_file
             # Process the mesh
+            process_args = ProcessArgs(input_mesh_file=input_mesh_file, save_dir=save_dir, fastmode=args.fastmode, ablation=args.ablation)
             main_shape_wise(process_args)
-            print(f"Successfully processed index {idx}: {folder_name}\n")
+            logger.info(f"Successfully processed index {idx}: {folder_name}\n")
             
         except Exception as e:
-            print(f"Error processing index {idx}: {str(e)}")
+            logger.error(f"Error processing index {idx}: {str(e)}")
             failed_indices.append(idx)
             traceback.print_exc()
             continue
     
-    print(f"\nProcessing complete. Failed indices: {failed_indices}")
+    logger.info(f"\nProcessing complete. Failed indices: {failed_indices}")
