@@ -39,11 +39,6 @@ class AlgorithmConfig:
     EARLY_STOP_ITER: int = 1
 
 
-    ### INVERSION RELATED
-    OPT_MIN_TRANSLATE: float = -0.9999
-    OPT_MAX_TRANSLATE: float = 0.9999
-    OPT_MIN_SCALE: float = 0.00001
-    OPT_MAX_SCALE: float = 1.9999
 
     # OPTIM
     OPTIMIZER: str = "ADAM"
@@ -62,6 +57,7 @@ class AlgorithmConfig:
     OPT_STOPPING_IOU: float = 0.99
     MAX_ITER: int = 2500
     STOCHASTIC_PRECONDITION_INIT_VAL: float = 2 * np.sqrt(3) * 0.01
+    STOCHASTIC_PRECONDITION_INIT_VAL_LOWER: float = 2 * np.sqrt(3) * 0.01
 
     # OTHER:
     # TARGET_MODE: str = "bboxed"
@@ -118,23 +114,33 @@ class AlgorithmConfig:
     LAST_RUN_MAX_TEMP_VAL: float = 0.1
 
     PRIM_TYPE: str = "SuperFrustum"
+    # PRIM_TYPE: str = "VarAxisSF"
     SMOOTHEN: bool = True
     CUBOID_MODE: bool = False
     NEO_SMPL_MODE: bool = False
     FREEZE_PREV_PRIMS: bool = False
     
     OPT_DTYPE: str = th.float32
-    AOT_ARTIFACT_DIR: str = "../aot"
     AOT_ARTIFACT_FILE: str = None
     SAVE_JIT_CACHE: bool = True
     OVERWRITE_JIT_CACHE: bool = False
     TorchCompile: bool = True
     FastMode: bool = True
+    COMPILED_FUNCTIONS: str = None
     
     # SEED CONFIGURATION
     RANDOM_SEED: int = 42  # Seed for optimization (set once at start)
     EVAL_SEED: int = 12345  # Seed for evaluation (reset at start of each eval call)
     USE_DETERMINISTIC: bool = False  # Enable PyTorch deterministic mode (may impact performance)
+    
+    # RENDER CONFIGURATION
+    RENDER_MODE: bool = True
+    # Subsample if its an issue.
+    RENDER_ITER: int = 1
+    
+    # Ablations:
+    LOWER_SP: bool = False
+    BIDIR: bool = False
     
     @staticmethod
     def save_to_file(file_path):
@@ -169,13 +175,13 @@ def main_setting():
     AlgorithmConfig.N_SURFACE_POINTS: int = 100_000
     AlgorithmConfig.TARGET_MODE: str = "dilated"
     # AlgorithmConfig.TARGET_MODE: str = None
-    AlgorithmConfig.TARGET_MODE_DILATION: float = 0.2
-    AlgorithmConfig.OPT_RESOLUTION: int = 128
+    AlgorithmConfig.TARGET_MODE_DILATION: float = 0.15
+    AlgorithmConfig.OPT_RESOLUTION: int = 64
 
 
     AlgorithmConfig.N_ITERS: int = 400
     AlgorithmConfig.SAT_PATIENCE: int = 100
-    AlgorithmConfig.MAX_ITER: int = 1600
+    AlgorithmConfig.MAX_ITER: int = 1000
     AlgorithmConfig.OPT_LR_RATE: float = 0.01
 
     AlgorithmConfig.USE_CURVATURE_WEIGHTS = True
@@ -198,39 +204,28 @@ def main_setting():
         "min_eroded_part_size_ratio": 0.005,
         "min_part_size_ratio": 0.0005,
         "size_limit": 20,
-        "max_mps_iter": 7,
+        "max_msd_iter": 7,
     }
 
 def low_cost_mode():
-    AlgorithmConfig.RENEW_PTS_ITER: int = 100
-    AlgorithmConfig.N_SURFACE_POINTS: int = 100_000
-    AlgorithmConfig.TARGET_MODE: str = "dilated"
-    AlgorithmConfig.TARGET_MODE_DILATION: float = 0.2
-    AlgorithmConfig.OPT_RESOLUTION: int = 64
-
+    AlgorithmConfig.N_SURFACE_POINTS = 75_000
+    AlgorithmConfig.OPT_RESOLUTION = 32
     # AlgorithmConfig.N_ITERS: int = 350
     # AlgorithmConfig.SAT_PATIENCE: int = 100
     # AlgorithmConfig.MAX_ITER: int = 1200
     # AlgorithmConfig.OPT_LR_RATE: float = 0.01
 
 def low_cost_mode_v2():
-    # AlgorithmConfig.RENEW_PTS_ITER: int = 100
-    # AlgorithmConfig.N_SURFACE_POINTS: int = 100_000
-    # AlgorithmConfig.TARGET_MODE: str = "dilated"
-    # AlgorithmConfig.TARGET_MODE_DILATION: float = 0.2
-    # AlgorithmConfig.OPT_RESOLUTION: int =64
-
-    # AlgorithmConfig.N_ITERS: int = 250
-    # AlgorithmConfig.SAT_PATIENCE: int = 100
-    # AlgorithmConfig.MAX_ITER: int = 1000
-    # AlgorithmConfig.OPT_LR_RATE: float = 0.02
-    ...
+    AlgorithmConfig.N_ITERS: int = 250
+    AlgorithmConfig.SAT_PATIENCE: int = 100
+    AlgorithmConfig.MAX_ITER: int = 1000
+    AlgorithmConfig.OPT_LR_RATE: float = 0.01
 
 def medium_cost_mode():
     AlgorithmConfig.RENEW_PTS_ITER: int = 100
     AlgorithmConfig.N_SURFACE_POINTS: int = 100_000
     AlgorithmConfig.TARGET_MODE: str = "dilated"
-    AlgorithmConfig.TARGET_MODE_DILATION: float = 0.2
+    AlgorithmConfig.TARGET_MODE_DILATION: float = 0.15
     AlgorithmConfig.OPT_RESOLUTION: int = 128
 
     AlgorithmConfig.N_ITERS: int = 400
@@ -249,11 +244,6 @@ def high_cost_mode():
     AlgorithmConfig.N_ITERS: int = 500
     AlgorithmConfig.SAT_PATIENCE: int = 150
     AlgorithmConfig.MAX_ITER: int = 2500
-
-
-def check_config():
-    if AlgorithmConfig.FastMode:
-        assert AlgorithmConfig.PRIM_TYPE == "SuperFrustum"
 
 
 def initialize_seeds(seed: int = None, use_deterministic: bool = None):
@@ -324,3 +314,7 @@ def reset_eval_seeds(seed: int = None):
         pass
     
     return seed
+
+def check_config():
+    if AlgorithmConfig.FastMode:
+        assert AlgorithmConfig.PRIM_TYPE in ["SuperFrustum", "VarAxisSF"]

@@ -2,6 +2,7 @@
 # and from here add the older ones. 
 import os
 import torch as th
+import torch.nn.functional as F
 from geolipi.torch_compute.sketcher import Sketcher
 from geolipi.torch_compute.evaluate_expression import rec_eval, _parse_param_from_expr
 from geolipi.torch_compute.unroll_expression import rec_unroll, LocalContext, _process_params
@@ -278,7 +279,7 @@ def solid_sf_eval(coords: th.Tensor, size: th.Tensor,
             scale: th.Tensor | float, bulge_ratio: th.Tensor | float, 
             onion_ratio: th.Tensor | float, logits, temperature=1.0) -> th.Tensor:
     # 
-    g  = sample_gumbel(logits.shape, device=logits.device)
+    g  = sample_gumbel(logits.shape, device=logits.device, dtype=logits.dtype)
     w  = th.softmax((logits + g) / temperature, dim=-1)  # (..., 2)
     w_cube = w[..., 0:1]
     w_sphere = w[..., 1:2]
@@ -308,7 +309,7 @@ def solid_sf_packed_eval(coords, params, temperature):
     logits = params[..., 14:18]
 
     
-    g  = sample_gumbel(logits.shape, device=logits.device)
+    g  = sample_gumbel(logits.shape, device=logits.device, dtype=logits.dtype)
     w  = th.softmax((logits + g) / temperature, dim=-1)  # (..., 2)
     w_cube = w[..., 0:1]
     w_sphere = w[..., 1:2]
@@ -326,21 +327,63 @@ def solid_sf_packed_eval(coords, params, temperature):
     out_eval = superfrustum_packed_eval(coords, new_params)
     return out_eval
 # Other option - just update the tables used in the origin code. 
+
+def varaxis_sf_eval(coords: th.Tensor, size: th.Tensor, 
+            roundness: th.Tensor | float, dilate_3d: th.Tensor | float, 
+            scale: th.Tensor | float, bulge_ratio: th.Tensor | float, 
+            onion_ratio: th.Tensor | float, logits: th.Tensor, temperature=1.0) -> th.Tensor:
+
+    # --- ST gumbel-softmax: one-hot forward, soft backward
+    # y is (3,) and is exactly one-hot in forward.
+    
+    y = F.gumbel_softmax(logits, tau=temperature, hard=True, dim=-1)  # (3,)
+
+
+    # --- permutation matrices A s.t. new = old @ A  (works for (...,3) @ (3,3))
+    # 0: xyz, 1: yzx, 2: zxy
+    P_stack = coords.new_tensor([
+        [[1,0,0],[0,1,0],[0,0,1]],  # xyz
+        [[0,0,1],[1,0,0],[0,1,0]],  # yzx  (new = [y,z,x])
+        [[0,1,0],[0,0,1],[1,0,0]],  # zxy  (new = [z,x,y])
+    ])  # (3,3,3)
+
+    # Mix to get chosen permutation matrix; forward it's exactly one of them.
+
+    P = (y @ P_stack.reshape(3, 9)).reshape(3, 3)   # (3,3)
+    P = th.einsum('k,kij->ij', y, P_stack)  # (3,3)
+
+    # --- apply permutation to coords and size
+    coords_p = coords @ P  # (...,3)
+
+    # Ensure size is (3,) (broadcast-friendly)
+    # If size is (...,3), this still works as long as last dim is 3.
+    size_p = size @ P      # (...,3) typically (3,)
+    new_sdf = superfrustum_eval(coords_p, size_p, roundness, dilate_3d, scale, bulge_ratio, onion_ratio)
+    return new_sdf
+
+def superfrustum_y_eval(coords: th.Tensor, size, *args, **kwargs) -> th.Tensor:
+    return superfrustum_eval(coords, size, *args, **kwargs)
+
+def superfrustum_z_eval(coords: th.Tensor, size: th.Tensor, *args, **kwargs) -> th.Tensor:
+    return superfrustum_eval(coords[..., [1, 2, 0]], size[..., [1, 2, 0]], *args, **kwargs)
+
+def superfrustum_x_eval(coords: th.Tensor, size: th.Tensor, *args, **kwargs) -> th.Tensor:
+    return superfrustum_eval(coords[..., [2, 0, 1]], size[..., [2, 0, 1]], *args, **kwargs)
+
 function_map = {
     sps.SPBase: sp_simple_eval,
     sps.SPNeo: sp_original_eval,
     # sps.SPConicApprox: sp_conic_approx_eval,
     # sps.SPConicV2Approx: sp_conic_approx_eval,
     # sps.SPConicWrong: sp_conic_wrong_eval,
-    
-
     sps.SuperFrustum: superfrustum_eval,
     sps.SuperFrustumPacked: superfrustum_packed_eval,
-
-
     sps.SolidSF: solid_sf_eval,
     sps.SolidSFPacked: solid_sf_packed_eval,
-
+    sps.VarAxisSF: varaxis_sf_eval,
+    sps.SuperFrustumY: superfrustum_y_eval,
+    sps.SuperFrustumZ: superfrustum_z_eval,
+    sps.SuperFrustumX: superfrustum_x_eval,
 
 }
 PRIMITIVE_MAP.update(function_map)

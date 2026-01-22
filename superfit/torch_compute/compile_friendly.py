@@ -267,7 +267,7 @@ def batched_sf_packed_eval(coords, params):
 def batched_sf_packed_stochastic_eval(coords, params, logits, temperature):
     # B, N
     outputs = batched_sf_packed_eval(coords, params)
-    g  = sample_gumbel(logits.shape, device=logits.device)
+    g  = sample_gumbel(logits.shape, device=logits.device, dtype=logits.dtype)
     w  = th.softmax((logits + g) / temperature, dim=-1)  # (..., 2)
 
     # Unpack weights explicitly

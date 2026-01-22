@@ -1,10 +1,15 @@
 import torch as th
+import numpy as np
 import geolipi.symbolic as gls
 from geolipi.torch_compute.sketcher import Sketcher
 from typing import Optional, List, Tuple
 from geolipi.symbolic.registry import register_symbol
 from sysl.shader.shader_module import register_shader_module
+from sysl.shader.shader_templates.common import CONSTANTS
 
+CONSTANTS.update({
+    "PI": ("float", np.pi),
+})
 
 SPBaseShader = register_shader_module("""
 @name SPBase
@@ -156,9 +161,8 @@ SuperFrustumShader = register_shader_module("""
 @inputs pos, radius
 @outputs dist
 @dependencies SPTaperedOnion
-@vardeps
+@vardeps PI
 // --- constants ---
-#define PI 3.14159265359
 
 // rotate 90° CCW
 vec2 rot90(vec2 v){ return vec2(-v.y, v.x); }
@@ -220,4 +224,61 @@ float SuperFrustum(vec3 p, vec3 size, float roundness, float dilate_3d, float sc
     }
     float sd = SPTaperedOnion(new_p, size, roundness, dilate_3d, scale, onion_ratio);
     return sd;
+}""")
+
+SuperFrustumYShader = register_shader_module("""
+@name SuperFrustumY
+@inputs pos, radius
+@outputs dist
+@dependencies SuperFrustum
+@vardeps
+
+float SuperFrustumY(vec3 p, vec3 size, float roundness, float dilate_3d, float scale, float bulge_ratio, float onion_ratio)
+{   
+    return SuperFrustum(p, size, roundness, dilate_3d, scale, bulge_ratio, onion_ratio);
+}""")
+
+SuperFrustumZShader = register_shader_module("""
+@name SuperFrustumZ
+@inputs pos, radius
+@outputs dist
+@dependencies SuperFrustum
+@vardeps
+
+float SuperFrustumZ(vec3 p, vec3 size, float roundness, float dilate_3d, float scale, float bulge_ratio, float onion_ratio)
+{   
+    p = p.yzx;
+    size = size.yzx;
+    return SuperFrustum(p, size, roundness, dilate_3d, scale, bulge_ratio, onion_ratio);
+}""")
+
+SuperFrustumXShader = register_shader_module("""
+@name SuperFrustumX
+@inputs pos, radius
+@outputs dist
+@dependencies SuperFrustum
+@vardeps
+
+float SuperFrustumX(vec3 p, vec3 size, float roundness, float dilate_3d, float scale, float bulge_ratio, float onion_ratio)
+{      
+    p = p.zxy;
+    size = size.zxy;
+    return SuperFrustum(p, size, roundness, dilate_3d, scale, bulge_ratio, onion_ratio);
+}""")
+
+
+SFSPShader = register_shader_module("""
+@name SFSP
+@inputs pos, size, params, onion_ratio
+@outputs dist
+@dependencies SuperFrustum
+@vardeps 
+
+float SFSP(vec3 p, vec3 size, vec4 params, float onion_ratio)
+{   
+    float roundness = params.x;
+    float dilate_3d = params.y;
+    float scale = params.z;
+    float bulge_ratio = params.w;
+    return SuperFrustum(p, size, roundness, dilate_3d, scale, bulge_ratio, onion_ratio);
 }""")

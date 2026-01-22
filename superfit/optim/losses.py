@@ -37,8 +37,10 @@ def get_batched_shape_unoverlap_loss(prim_execs, full_execution, scale_factor):
     return loss
 
 
-def get_primitive_count_loss(transformed_params, temperature):
+def get_primitive_count_loss(transformed_params):
+    temperature = transformed_params[-1]
     logits = transformed_params[-2]
+    # SHould this also have GMBL noise? 
     soft = th.softmax(logits / temperature, dim=-1)
     loss = soft[:, 0].sum()
     return loss
@@ -61,7 +63,7 @@ def compute_total_loss(output_shape_occ, hard_target_fl,
                  output_surface_sdf,
                  primitive_sdfs, output_sdf, 
                  mask_shape, mask_surface, mask_surface_adj,
-                 transformed_params, temperature, 
+                 transformed_params, 
                  scale_factor, curvature_weights):
 
     # Shape occupancy loss
@@ -82,7 +84,7 @@ def compute_total_loss(output_shape_occ, hard_target_fl,
     loss_surface_sdf = 0.5 * (mask_surface * delta_surface_sdf).sum() / (mask_surface_sum + 1e-8)
 
     param_loss = get_param_loss(transformed_params)
-    primitive_count_loss = get_primitive_count_loss(transformed_params, temperature)
+    primitive_count_loss = get_primitive_count_loss(transformed_params)
     overlap_loss = get_batched_overlap_loss(primitive_sdfs, output_sdf, scale_factor)
     shape_unoverlap_loss = get_batched_shape_unoverlap_loss(primitive_sdfs, output_sdf, scale_factor)
 

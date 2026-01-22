@@ -9,12 +9,12 @@ from superfit.utils.logger import logger
 
 
 def msd_new(target_sdf, sketcher_3d, 
-            max_mps_iter=100,
+            max_msd_iter=100,
             min_eroded_part_size_ratio=0.005, 
             min_part_size_ratio=0.001,
             *args, **kwargs):
     output = decompose_msd(target_sdf, sketcher_3d, 
-                    max_mps_iter=max_mps_iter,
+                    max_msd_iter=max_msd_iter,
                     min_eroded_part_size_ratio=min_eroded_part_size_ratio,
                     min_part_size_ratio=min_part_size_ratio, 
                     *args, **kwargs)
@@ -77,13 +77,13 @@ def find_mo_parts(cur_target_sdf,
     min_eroded_part_size = shape_size * min_eroded_part_size_ratio
     min_eroded_part_size = int(min_eroded_part_size)
 
-    # all_vals = th.arange(min_val, min(0.0, min_val + basic_jump_size * n_steps_jump/3.0), basic_jump_size).to(sketcher_3d.device).to(sketcher_3d.dtype)
-    # neg_sdf_vals = cur_target_sdf[cur_target_sdf<=0]
-    # deltas = neg_sdf_vals[None, :] < all_vals[:, None]
-    # deltas = deltas.float().sum(axis=-1)
-    # cond = deltas < min_eroded_part_size
-    # first_false = (~cond).int().argmax().item()
-    first_false = 0
+    all_vals = th.arange(min_val, min(0.0, min_val + basic_jump_size * n_steps_jump/3.0), basic_jump_size).to(sketcher_3d.device).to(sketcher_3d.dtype)
+    neg_sdf_vals = cur_target_sdf[cur_target_sdf<=0]
+    deltas = neg_sdf_vals[None, :] < all_vals[:, None]
+    deltas = deltas.float().sum(axis=-1)
+    cond = deltas < min_eroded_part_size
+    first_false = (~cond).int().argmax().item()
+    # first_false = 0
     logger.info(f"first_false: {first_false}")
     for i in range(first_false, n_steps_jump + 1):
         cur_threshold = min_val + basic_jump_size * i
@@ -118,7 +118,7 @@ def find_mo_parts(cur_target_sdf,
 
 
 def decompose_msd(target_sdf, sketcher_3d, 
-                    max_mps_iter=100, n_steps_jump=100, 
+                    max_msd_iter=100, n_steps_jump=100, 
                     min_eroded_part_size_ratio=0.0005,
                     min_part_size_ratio=0.0001,
                     clean_up_delta=CLEAN_UP_DELTA,
@@ -139,7 +139,7 @@ def decompose_msd(target_sdf, sketcher_3d,
     min_part_size = shape_size * min_part_size_ratio
     min_part_size = int(min_part_size)
 
-    while cur_iter < max_mps_iter:
+    while cur_iter < max_msd_iter:
         # Find minimal level set that is bigger than min_size_ratio. 
         min_sdf = cur_target_sdf.min()
         if min_sdf > 0.0:

@@ -1,81 +1,56 @@
 import os
-import csv
-import time
 import argparse
 import traceback
 import torch as th
 import numpy as np
 import _pickle as cPickle
-from dataclasses import dataclass
 from geolipi.torch_compute import recursive_evaluate, Sketcher
 from superfit.algos.resfit import resfit
 from superfit.utils.mesh_preprocess import process_mesh_to_sdf
 from superfit.utils.config import AlgorithmConfig as AlgConf
 from superfit.utils.stats import Stats
 from superfit.utils.logger import logger
+from superfit.utils.constants import AOT_ARTIFACT_DIR, SAVE_DIR_BASE
+from superfit.utils.io import load_toy4k_mesh_paths, load_partobjaverse_mesh_paths
 import superfit.utils.config as config_options
+
+
 th.set_float32_matmul_precision("medium")
 th.backends.cudnn.benchmark = True
+th._dynamo.config.cache_size_limit = 32
 
-# Path configuration
-OLD_PATH_PREFIX = "/sensei-fs-3/users/aganeshan/data/toy4k/"
-NEW_PATH_PREFIX = "/users/aganesh8/data/aganesh8/data/toys4k_obj_files"
-SAVE_DIR_BASE = "/users/aganesh8/data/aganesh8/projects/project_neo/outputs"
-DEFAULT_CSV_FILE = "test_set_1.csv"
 
-# Hardcoded index list - modify as needed
-INDICES = np.arange(0, 100)  # Example indices, update with your desired indices
+def parse_args():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dataset", type=str, default="toys4k", choices=["toys4k", "partobjaverse"], help="Dataset to use: 'toys4k' or 'partobjaverse'")
+    parser.add_argument("--start_ind", type=int, default=0, help="Start index (inclusive)")
+    parser.add_argument("--end_ind", type=int, default=100, help="End index (exclusive)")
+    parser.add_argument("--ablation", type=int, default=0, help="Ablation number")
+    parser.add_argument("--fastmode", action="store_true", required=False, default=False, help="Enable fastmode")
+    parser.add_argument("--overwrite", action="store_true", required=False, default=False, help="Overwrite existing save files")
+    parser.add_argument("--save_dir", type=str, default=SAVE_DIR_BASE, help="Save directory")
+    return parser.parse_args()
 
-@dataclass
-class ProcessArgs:
-    input_mesh_file: str
-    save_dir: str
-    fastmode: bool
-    ablation: int
 
-def main_shape_wise(args):
-    #### Set Mode.  
-    input_mesh_file = args.input_mesh_file
-    save_dir = args.save_dir
+def shape_wise_resfit(input_mesh_file, save_dir, fastmode, ablation):
+    """Process a single mesh file with resfit algorithm."""
     config_options.main_setting()
-    if args.fastmode:
-        AlgConf.FastMode = True
-        AlgConf.TorchCompile = True
-    else:
+
+    if not fastmode:
         AlgConf.FastMode = False
         AlgConf.TorchCompile = False
-    config_options.low_cost_mode()
-    if args.ablation == 0:
-        pass
-    elif args.ablation == 1:
-        AlgConf.N_SURFACE_POINTS = 150_000
-        AlgConf.OPT_RESOLUTION = 32
-    elif args.ablation == 2:
-        AlgConf.SCALE_FACTOR_START = 13.0
-        AlgConf.N_ITERS = 250
-        AlgConf.SAT_PATIENCE = 100
-        AlgConf.MAX_ITER = 1000
-        AlgConf.OPT_LR_RATE = 0.02
-    elif args.ablation == 3:
-        pass
-    elif args.ablation == 4:
-        AlgConf.N_SURFACE_POINTS = 75_000
-        AlgConf.OPT_RESOLUTION = 32
-    elif args.ablation == 5:
-        AlgConf.N_ITERS = 400
-        AlgConf.SAT_PATIENCE = 100
-        AlgConf.MAX_ITER = 1000
-        AlgConf.OPT_LR_RATE = 0.01
-    elif args.ablation == 6:
-        config_options.low_cost_mode_v2()
-    elif args.ablation == 7:
-        config_options.low_cost_mode_v2()
-        AlgConf.N_SURFACE_POINTS = 50_000
-    
-    AlgConf.AOT_ARTIFACT_FILE = os.path.join(AlgConf.AOT_ARTIFACT_DIR, f"aot_artifact_{args.ablation}.pt")    
 
-    # TEST
-    failed_indices = []
+    if ablation == 0:
+        pass
+    elif ablation == 1:
+        config_options.low_cost_mode()
+    elif ablation == 10:
+        AlgConf.BIDIR = True
+        # AlgConf.PRIM_TYPE = "VarAxisSF"
+    
+    AlgConf.AOT_ARTIFACT_FILE = os.path.join(AOT_ARTIFACT_DIR, f"aot_artifact_{ablation}.pt")    
+    
     if not os.path.exists(save_dir):
         os.makedirs(save_dir, exist_ok=True)
 
@@ -84,9 +59,6 @@ def main_shape_wise(args):
     AlgConf.save_to_file(save_config_file)
 
     save_file = os.path.join(save_dir, "primitive_assembly.pkl")
-    # if os.path.exists(save_file):
-    #     continue
-
     sketcher_3d = Sketcher(resolution=AlgConf.DATA_RESOLUTION, n_dims=3)
     save_file_temp = os.path.join(save_dir, "resfit_prog.pkl")
     
@@ -99,69 +71,68 @@ def main_shape_wise(args):
     if min_sdf <-1.0 or max_sdf > 1.0:
         logger.error(f"Invalid SDF range: min={min_sdf:.6f}, max={max_sdf:.6f}")
         raise ValueError(f"----------- INVALID SDF RANGE -----------")
-        # continue
+    
     Stats.reset()
+    Stats.record("input_mesh_file", input_mesh_file)
     with Stats.timer("resfit_total"):
         resfit(mesh, save_file=save_file_temp)
     cPickle.dump(Stats.get_dict(), open(save_file, "wb"))
     logger.info(f"Saved to {save_file}")
-    if failed_indices:
-        logger.warning(f"Failed indices: {failed_indices}")
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--csv_file", type=str, default=DEFAULT_CSV_FILE, help="Path to CSV file with mesh paths")
-    parser.add_argument("--fastmode", action="store_true", required=False, default=False, help="Enable fastmode")
-    parser.add_argument("--ablation", type=int, default=0, help="Ablation number")
-    
-    args = parser.parse_args()
-    
-    # Parse CSV file
-    csv_path = args.csv_file
-    if not os.path.isabs(csv_path):
-        # If relative path, assume it's in the project root
-        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        csv_path = os.path.join(project_root, csv_path)
-    
-    mesh_cat_and_file_list = []
-    with open(csv_path, "r") as f:
-        reader = csv.reader(f)
-        for row in reader:
-            mesh_cat_and_file_list.append((row[0], row[1]))
-    # Skip header row
-    mesh_cat_and_file_list = mesh_cat_and_file_list[1:]
+def main(args):
+    """Main function that processes all meshes based on the selected dataset."""
+    # Load mesh paths based on dataset
+    if args.dataset == "toys4k":
+        mesh_paths = load_toy4k_mesh_paths()
+    elif args.dataset == "partobjaverse":
+        mesh_paths = load_partobjaverse_mesh_paths()
+    else:
+        raise ValueError(f"Unknown dataset: {args.dataset}")
     
     failed_indices = []
+    indices = np.arange(args.start_ind, args.end_ind)
     
     # Process each index in the list
-    for idx in INDICES:
-        if idx >= len(mesh_cat_and_file_list):
-            logger.warning(f"Index {idx} is out of range (max: {len(mesh_cat_and_file_list) - 1})")
+    for idx in indices:
+        if idx >= len(mesh_paths):
+            logger.warning(f"Index {idx} is out of range (max: {len(mesh_paths) - 1})")
             continue
         
         try:
-            category, mesh_file = mesh_cat_and_file_list[idx]
+            input_mesh_file = mesh_paths[idx]
             
-            # Replace path prefix
-            input_mesh_file = mesh_file.replace(OLD_PATH_PREFIX, NEW_PATH_PREFIX)
-            
-            # Extract last folder name from path (e.g., truck_028 from .../truck/truck_028/mesh.obj)
-            mesh_dir = os.path.dirname(input_mesh_file)
-            folder_name = os.path.basename(mesh_dir)
+            # Extract folder name from path for save directory
+            # For toys4k: .../truck/truck_028/mesh.obj -> truck_028
+            # For partobjaverse: .../file.glb -> file (without extension)
+            if args.dataset == "toys4k":
+                mesh_dir = os.path.dirname(input_mesh_file)
+                folder_name = os.path.basename(mesh_dir)
+            else:  # partobjaverse
+                folder_name = os.path.splitext(os.path.basename(input_mesh_file))[0]
             
             # Set save directory
-            save_dir = os.path.join(SAVE_DIR_BASE, "ablation", f"ablation_{args.ablation}_v3", folder_name)
+            save_dir = os.path.join(args.save_dir, args.dataset, f"ablation_{args.ablation}", folder_name)
+            
+            # Check if save file exists and skip if overwrite is False
+            save_file = os.path.join(save_dir, "primitive_assembly.pkl")
+            if os.path.exists(save_file):
+                if not args.overwrite:
+                    logger.info(f"Skipping index {idx}: {folder_name} (file already exists: {save_file})")
+                    continue
+                else:
+                    logger.info(f"Overwriting index {idx}: {folder_name} (file already exists: {save_file})")
+                    # Remove everything in the save directory
+                    for file in os.listdir(save_dir):
+                        os.remove(os.path.join(save_dir, file))
             
             logger.info(f"Processing index {idx}: {folder_name}")
             logger.info(f"  Input: {input_mesh_file}")
             logger.info(f"  Output: {save_dir}")
-            args.input_mesh_file = input_mesh_file
-            # Process the mesh
-            process_args = ProcessArgs(input_mesh_file=input_mesh_file, save_dir=save_dir, fastmode=args.fastmode, ablation=args.ablation)
-            main_shape_wise(process_args)
-            logger.info(f"Successfully processed index {idx}: {folder_name}\n")
             
+            # Process the mesh
+            shape_wise_resfit(input_mesh_file, save_dir, args.fastmode, args.ablation)
+            logger.info(f"Successfully processed index {idx}: {folder_name}\n")
         except Exception as e:
             logger.error(f"Error processing index {idx}: {str(e)}")
             failed_indices.append(idx)
@@ -169,3 +140,8 @@ if __name__ == "__main__":
             continue
     
     logger.info(f"\nProcessing complete. Failed indices: {failed_indices}")
+
+
+if __name__ == "__main__":
+    args = parse_args()
+    main(args)

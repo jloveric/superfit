@@ -2,21 +2,21 @@ import ast
 import time
 import os
 import torch as th
+import torch._dynamo as dynamo
 import geolipi.symbolic as gls
 from dataclasses import dataclass
 from typing import Callable, Any, List
-import torch._dynamo as dynamo
 from geolipi.torch_compute.unroll_expression import unroll_expression
 from ..torch_compute.compile_friendly import batched_sf_packed_stochastic_eval, _sdf_smooth_union_pair, batched_sf_packed_stochastic_su_eval
 from .losses import compute_total_loss
-from .param_conversion import ntco_packed_var_to_param
-from .utils import perform_batched_stochastic_precondition
 from ..utils.config import AlgorithmConfig as AlgConf
 from ..utils.logger import logger
+from .param_conversion import params_from_variables
+from .primitive_registry import PrimitiveHandler
 
 N_OPT_ITERS = 5
 
-def compile_program_jit(in_program, sketcher, 
+def compile_program_jit(in_program, sketcher, handler: PrimitiveHandler,
             isolated_vars=True,
             torch_compile=False):
     # This is the old pass. 
@@ -35,31 +35,39 @@ def compile_program_jit(in_program, sketcher,
 class CompiledOps:
     compiled_assembly_execution: Callable[..., Any] = batched_sf_packed_stochastic_eval
     compiled_loss_function: Callable[..., Any] = compute_total_loss
+    param_from_variables: Callable[..., Any] = params_from_variables
 
 
 # Run a dummy Opt function. 
-def compile_cached_with_dummy_opt(in_program, sketcher, 
-            isolated_vars=True,
-            torch_compile=False):
+def compile_cached_with_dummy_opt(in_program, sketcher,
+            handler: PrimitiveHandler, torch_compile=False, *args, **kwargs):
+
+    forward_function = handler.batched_eval_function
+
+    if AlgConf.COMPILED_FUNCTIONS is not None:
+        compiled_ops = AlgConf.COMPILED_FUNCTIONS
+        return compiled_ops
+
     if not torch_compile:
         def execute(coords, all_params):
-            output = batched_sf_packed_stochastic_su_eval(coords, *all_params)
+            output = forward_function(coords, *all_params)
             return output
         compiled_ops = CompiledOps(
             compiled_assembly_execution=execute,
             compiled_loss_function=compute_total_loss,
+            param_from_variables=params_from_variables,
         )
         return compiled_ops
 
 
-    prim_function = batched_sf_packed_stochastic_eval
-    comp_func = th.compile(prim_function, 
+    comp_func = th.compile(forward_function, 
         backend="inductor",
         # mode="max-autotune",
         mode="default",
         fullgraph=True,
         dynamic=True,
     )
+    # comp_func = forward_function
     compiled_su_func = th.compile(_sdf_smooth_union_pair, 
         backend="inductor",
         # mode="max-autotune",
@@ -67,6 +75,7 @@ def compile_cached_with_dummy_opt(in_program, sketcher,
         fullgraph=True,
         dynamic=True,
     )
+    # compiled_su_func = _sdf_smooth_union_pair
 
     def compiled_assembly_execution(coords, all_params):
         params, su_vals, logits, temperature = all_params 
@@ -87,6 +96,16 @@ def compile_cached_with_dummy_opt(in_program, sketcher,
         fullgraph=True,
         dynamic=True,
     )
+    # compiled_loss_function = compute_total_loss
+
+    compiled_param_from_variables = th.compile(handler.param_from_variables_fast, 
+        backend="inductor",
+        # mode="max-autotune",
+        mode="default",
+        fullgraph=True,
+        dynamic=True,
+    )
+    # compiled_param_from_variables = handler.param_from_variables_fast
     # Primitive Instantiation
     # Loop: 
     artifact_file = AlgConf.AOT_ARTIFACT_FILE
@@ -103,7 +122,7 @@ def compile_cached_with_dummy_opt(in_program, sketcher,
     _surface_coords = th.randn(1, SURF_SIZE, 3, dtype=dtype, device=device).clone().detach().requires_grad_(False)
     _surface_adj_coords = th.randn(1, SURF_SIZE, 3, dtype=dtype, device=device).clone().detach().requires_grad_(False)
 
-    _params = th.randn(BATCH_SIZE, 14, dtype=dtype, device=device).clone().detach().requires_grad_(True)
+    _params = th.randn(BATCH_SIZE, handler.batched_param_size, dtype=dtype, device=device).clone().detach().requires_grad_(True)
     _su_vals = th.randn(BATCH_SIZE-1, 1, dtype=dtype, device=device).clone().detach().requires_grad_(True)
     _logits = th.randn(BATCH_SIZE, 2, dtype=dtype, device=device).clone().detach().requires_grad_(True)
     _temperature = th.randn([1,], dtype=dtype, device=device).clone().detach().requires_grad_(False)
@@ -152,7 +171,7 @@ def compile_cached_with_dummy_opt(in_program, sketcher,
         th.compiler.cudagraph_mark_step_begin()
         optim.zero_grad()
         start_time = time.time()
-        transformed_params = _params_from_variables_fast_sf(cur_vars)
+        transformed_params = compiled_param_from_variables(cur_vars)
         transformed_params.append(_temperature)
         # transformed_params = [x for x in cur_vars] + [_temperature]
         # Concatenate all coordinates
@@ -165,17 +184,18 @@ def compile_cached_with_dummy_opt(in_program, sketcher,
                                         output_surface_sdf,
                                         primitive_sdfs, output_sdf, 
                                         mask_shape, mask_surface, mask_surface_adj,
-                                        transformed_params, _temperature, 
+                                        transformed_params, 
                                         scale_factor, _curvature_weights)
         total_loss = loss_1 + loss_2
         total_loss.backward()
         optim.step()
         end_time = time.time()
-        logger.debug(f"Time taken for iteration: {end_time - start_time:.3f}s")
+        logger.info(f"Time taken for iteration: {end_time - start_time:.3f}s")
     # assign the compiled functions to an object.
     compiled_ops = CompiledOps(
         compiled_assembly_execution=compiled_assembly_execution,
         compiled_loss_function=compiled_loss_function,
+        param_from_variables=compiled_param_from_variables,
     )
     logger.info("Finished compiling with dummy opt")
     if AlgConf.SAVE_JIT_CACHE:
@@ -188,18 +208,6 @@ def compile_cached_with_dummy_opt(in_program, sketcher,
             assert artifacts is not None
             artifact_bytes, cache_info = artifacts
             th.save(artifact_bytes, artifact_file)
+    AlgConf.COMPILED_FUNCTIONS = compiled_ops
     return compiled_ops
     
-def _params_from_variables_fast_sf(tensor_list):
-    param_list = []
-    variable = tensor_list[0]
-    param = ntco_packed_var_to_param(variable)
-    param_list.append(param)
-    variable = tensor_list[1]
-    mul, extra = 1.0, 1.0
-    param = th.tanh(variable) * mul + extra
-    param_list.append(param)
-    variable = tensor_list[2]
-    param = variable
-    param_list.append(param)
-    return param_list

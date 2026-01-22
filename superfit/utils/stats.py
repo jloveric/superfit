@@ -11,7 +11,10 @@ def _flatten_dict(d: Dict[str, Any], prefix: str = "") -> Dict[str, Any]:
     for key, value in d.items():
         full_key = f"{prefix}.{key}" if prefix else key
         if isinstance(value, dict):
-            result.update(_flatten_dict(value, full_key))
+            if value.get("GLFunction", False):
+                result[full_key] = value
+            else:
+                result.update(_flatten_dict(value, full_key))
         else:
             result[full_key] = value
     return result

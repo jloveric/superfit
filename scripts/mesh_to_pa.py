@@ -9,7 +9,10 @@ from superfit.utils.logger import logger
 from superfit.algos.resfit import resfit
 import superfit.utils.config as config_options
 from superfit.utils.mesh_preprocess import process_mesh_to_sdf
+from superfit.utils.constants import AOT_ARTIFACT_DIR
+from superfit.utils.io import save_html
 from superfit.utils.config import AlgorithmConfig as AlgConf, initialize_seeds
+from superfit.utils.editing import save_edit_mode_html
 # Over parameterize - even more - see what happens - all on the base version. 
 
 th.set_float32_matmul_precision("medium")
@@ -18,15 +21,13 @@ th.backends.cudnn.benchmark = True
 
 def main_shape_wise(args):
         
-    input_mesh_file = args.input_mesh_file
+    input_file = args.input_file
     save_dir = args.save_dir
     
     if not os.path.exists(save_dir):
         os.makedirs(save_dir, exist_ok=True)
     # Configuration setup. 
     config_options.main_setting()
-    config_options.low_cost_mode()
-    config_options.low_cost_mode_v2()
     if args.fastmode:
         AlgConf.FastMode = True
         AlgConf.TorchCompile = True
@@ -36,15 +37,18 @@ def main_shape_wise(args):
     config_options.check_config()
     save_config_file = os.path.join(save_dir, "config.json")
     AlgConf.save_to_file(save_config_file)
+    # Assuming we are running the baseline version.
+    AlgConf.AOT_ARTIFACT_FILE = os.path.join(AOT_ARTIFACT_DIR, f"aot_artifact_{0}.pt")    
+    
     
     # Initialize seeds after config setup
     initialize_seeds()
     
-    save_file = os.path.join(save_dir, f"final.pkl")
-    save_file_temp = os.path.join(save_dir, f"resfit_stepwise.pkl")
+    save_file = os.path.join(save_dir, f"final_content.pkl")
+    save_file_temp = os.path.join(save_dir, f"stepwise.pkl")
 
     sketcher_3d = Sketcher(resolution=AlgConf.DATA_RESOLUTION, n_dims=3)
-    mesh, target_sdf = process_mesh_to_sdf(input_mesh_file, sketcher_3d)
+    mesh, target_sdf = process_mesh_to_sdf(input_file, sketcher_3d)
 
     if not mesh.is_watertight:
         raise ValueError(f"------- Non Watertight Mesh -------")
@@ -56,18 +60,32 @@ def main_shape_wise(args):
         # continue
         
     Stats.reset()
+    Stats.record("input_file", input_file)
     with Stats.timer("resfit_total"):
-        resfit(mesh, save_file=save_file_temp)
+        best_program, running_program = resfit(mesh, save_file=save_file_temp)
     cPickle.dump(Stats.get_dict(), open(save_file, "wb"))
     logger.info(f"Saved to {save_file}")
+
+    # If save html
+    if args.save_html:
+        save_file_name = os.path.join(save_dir, "best_program.html")
+        html_code = save_html(best_program, save_file_name)
+        logger.info(f"Saved HTML to {save_file_name}")
+    if args.save_edit_html:
+        save_file_name = os.path.join(save_dir, "best_edit_mode.html")
+        html_code = save_edit_mode_html(best_program, sketcher_3d, save_file_name)
+        logger.info(f"Saved HTML to {save_file_name}")
+
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input_mesh_file", type=str, required=True)
+    parser.add_argument("--input_file", type=str, required=True)
     parser.add_argument("--save_dir", type=str, required=True)
     parser.add_argument("--profile_path", type=str, required=False, default=None)
     parser.add_argument("--fastmode", action="store_true", required=False, default=False)
+    parser.add_argument("--save_html", action="store_true", required=False, default=False)
+    parser.add_argument("--save_edit_html", action="store_true", required=False, default=False)
 
     args = parser.parse_args()
     if args.profile_path is not None:
@@ -79,4 +97,4 @@ if __name__ == "__main__":
         pstats.Stats(args.profile_path).strip_dirs().sort_stats("cumtime").print_stats(50)
     else:
         main_shape_wise(args)
-# python scripts/mesh_to_pa.py --input_mesh_file /media/aditya/OS/data/toys_4k/toys4k_obj_files/airplane/airplane_007/mesh.obj --save_dir ../outputs/basic
+# python scripts/mesh_to_pa.py --input_file /media/aditya/OS/data/toys_4k/toys4k_obj_files/airplane/airplane_007/mesh.obj --save_dir ../outputs/basic

@@ -10,7 +10,7 @@ from ..symbolic.utils import gather_primitives
 from ..utils.config import AlgorithmConfig as AlgConf
 from ..utils.logger import logger
 from ..utils.stats import Stats
-from .utils import (quick_sample_points, exponential_temperature_schedule, 
+from .utils import (quick_sample_points_and_normals, exponential_temperature_schedule, 
                     recompute_sdf_from_BVH, get_mask_scaled_aabb)
 from .curvature import get_points_and_weights
 from .measures import get_iou
@@ -96,15 +96,13 @@ def run_optimization_loop(init_opt_program, target_mesh, target, sketcher,
         tversky_weights = None
         tversky_weights_surface_adj = None
     
-
-
     ## Process Input:
     st = time.time()
     if AlgConf.USE_CURVATURE_WEIGHTS:
         surface_sampled_points, curvature_weights = get_points_and_weights(target_mesh, sketcher, n_points=AlgConf.N_SURFACE_POINTS)
         curvature_weights = AlgConf.CURVATURE_WEIGHTS_SCALE * curvature_weights
     else:
-        surface_sampled_points, sampled_normals = quick_sample_points(target_mesh, sketcher, n_points=AlgConf.N_SURFACE_POINTS)
+        surface_sampled_points, sampled_normals = quick_sample_points_and_normals(target_mesh, sketcher, n_points=AlgConf.N_SURFACE_POINTS)
         curvature_weights = None
 
     BVH = cubvh.cuBVH(target_mesh.vertices, target_mesh.faces)
@@ -215,7 +213,6 @@ def run_optimization_loop(init_opt_program, target_mesh, target, sketcher,
         param_loss = get_param_loss(transformed_params, type_annotation)
         primitive_count_loss = get_primitive_count_loss(transformed_params, temperature)
         overlap_loss = get_batched_overlap_loss(primitive_sdfs, output_sdf, sigmoid_func, scale_factor)
-
         shape_unoverlap_loss = get_batched_shape_unoverlap_loss(primitive_sdfs, output_sdf, sigmoid_func, scale_factor)
 
         total_loss = AlgConf.LOSS_OCC_ALPHA * loss_shape_occ + \

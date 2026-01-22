@@ -37,4 +37,16 @@ To provide:
 # Simple: 
     1. Gradually lowering the noise 
     2. Bidir. Sampling. 
-    3. 
+
+
+# Best ones: 
+
+1. Nano banana -> 
+2. off the shelf. 
+
+
+
+1. Generate cache
+2. Run Mesh to PA
+3. Run Eval, Run Material Fit, Run Generate Edit HTML.
+4. Generate Visualization.

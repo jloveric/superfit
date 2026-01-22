@@ -28,6 +28,10 @@ from ..optim.semantic_loss import SemanticLossHolder
 from .kmeans import primitive_semantic_nmi_fast
 
 
+RESOLUTIONS = [128,]
+CD_RES = 2048
+CD_MULTIPLIER = 100.0
+
 class MeasurePack:
 
     def __init__(self, measure: str, target_mesh: trimesh.Trimesh, 
@@ -50,12 +54,8 @@ class MeasurePack:
 
 
 
-RESOLUTIONS = [128,]
-CD_RES = 2048
-CD_MULTIPLIER = 100.0
-
-def eval_shape(pred_program, measure_pack, semantic_loss_holder: SemanticLossHolder,
-                inp_mode: str = "IRPF"):
+def eval_shape(pred_program, measure_pack, semantic_loss_holder: SemanticLossHolder=None,
+                inp_mode: str = "SuperFit"):
     # Reset seeds for evaluation to ensure consistent random sampling
     reset_eval_seeds()
     
@@ -71,7 +71,7 @@ def eval_shape(pred_program, measure_pack, semantic_loss_holder: SemanticLossHol
             target = renorm_target_sdf(target, sketcher_3d)
 
             # target = target_cleanup(target, sketcher_3d)
-            output = recursive_evaluate(pred_program.tensor(), sketcher_3d)
+            output = recursive_evaluate(pred_program.tensor(dtype=sketcher_3d.dtype), sketcher_3d)
             target_occ = (target <= 0.0).float()
             output_occ = (output <= 0.0).float()
             iou_val = get_iou(target_occ, output_occ).item()
@@ -79,23 +79,23 @@ def eval_shape(pred_program, measure_pack, semantic_loss_holder: SemanticLossHol
 
         surface_proximal_samples = sample_surface_proximal_points(input_mesh, n_points=AlgConf.N_SURFACE_POINTS_EVAL, jitter_sigma=AlgConf.SURFACE_ADJ_PERTURBATION_SCALE)
         surface_proximal_samples = th.from_numpy(surface_proximal_samples).float().to(sketcher_3d.device)
-        surface_proximal_sdf, surface_proximal_gradients = get_sdf_and_gradients(surface_proximal_samples, input_mesh, sketcher_3d)
+        surface_proximal_sdf, surface_proximal_gradients = get_sdf_and_gradients(surface_proximal_samples, input_mesh)
         surface_proximal_occ = (surface_proximal_sdf <= 0.0).float()
-        surface_eval = recursive_evaluate(pred_program.tensor(), sketcher_3d, coords=surface_proximal_samples)
+        surface_eval = recursive_evaluate(pred_program.tensor(dtype=sketcher_3d.dtype), sketcher_3d, coords=surface_proximal_samples)
         surface_eval_occ = (surface_eval <= 0.0).float()
         iou_gt_surface = get_iou(surface_proximal_occ, surface_eval_occ).item()
         Stats.record("iou_gt_surface_proximal", iou_gt_surface)
 
         # Bi directonal Surface Iou
-        output = recursive_evaluate(pred_program.tensor(), sketcher_3d)
+        output = recursive_evaluate(pred_program.tensor(dtype=sketcher_3d.dtype), sketcher_3d)
         pred_mesh = sdf_to_mesh(output, sketcher_3d)
         surface_proximal_samples = sample_surface_proximal_points(pred_mesh, n_points=AlgConf.N_SURFACE_POINTS_EVAL, jitter_sigma=AlgConf.SURFACE_ADJ_PERTURBATION_SCALE)
         surface_proximal_samples = th.from_numpy(surface_proximal_samples).float().to(sketcher_3d.device)
         # Eval the program: 
-        surface_eval = recursive_evaluate(pred_program.tensor(), sketcher_3d, coords=surface_proximal_samples)
+        surface_eval = recursive_evaluate(pred_program.tensor(dtype=sketcher_3d.dtype), sketcher_3d, coords=surface_proximal_samples)
         surface_eval_occ = (surface_eval <= 0.0).float()
         # get GT:
-        surface_proximal_sdf, surface_proximal_gradients = get_sdf_and_gradients(surface_proximal_samples, input_mesh, sketcher_3d)
+        surface_proximal_sdf, surface_proximal_gradients = get_sdf_and_gradients(surface_proximal_samples, input_mesh)
         surface_proximal_occ = (surface_proximal_sdf <= 0.0).float()
         iou_pred_surface = get_iou(surface_proximal_occ, surface_eval_occ).item()
         Stats.record("iou_pred_surface_proximal", iou_pred_surface)
@@ -106,7 +106,7 @@ def eval_shape(pred_program, measure_pack, semantic_loss_holder: SemanticLossHol
         
         surface_samples = sample_surface_proximal_points(input_mesh, n_points=AlgConf.N_SURFACE_POINTS_EVAL, jitter_sigma=0.0)
         surface_samples = th.from_numpy(surface_samples).float().to(sketcher_3d.device)
-        surface_sdf, _  = get_sdf_and_gradients(surface_samples, pred_mesh, sketcher_3d)
+        surface_sdf, _  = get_sdf_and_gradients(surface_samples, pred_mesh)
         mean_delta = th.mean(th.abs(surface_sdf))
         Stats.record("mean_sdf_delta", mean_delta.item())
 
@@ -171,7 +171,7 @@ def eval_shape(pred_program, measure_pack, semantic_loss_holder: SemanticLossHol
         Stats.record("objective", objective)
         # ----------- Additional metrics -----------
         # Overlap Amount - fraction of shape which has some overlap. 
-        prim_exec_sdf = [recursive_evaluate(x.tensor(), sketcher_3d) for x in primitives]
+        prim_exec_sdf = [recursive_evaluate(x.tensor(dtype=sketcher_3d.dtype), sketcher_3d) for x in primitives]
         prim_exec_sdf = th.stack(prim_exec_sdf, dim=0)
         prim_execs_occ = (prim_exec_sdf <= 0.0).float()
         overlap_amount = th.sum(prim_execs_occ, dim=0)
@@ -179,7 +179,7 @@ def eval_shape(pred_program, measure_pack, semantic_loss_holder: SemanticLossHol
         Stats.record("overlap_amount", overlap_amount.item())
 
         #
-        output_sdf = recursive_evaluate(pred_program.tensor(), sketcher_3d)
+        output_sdf = recursive_evaluate(pred_program.tensor(dtype=sketcher_3d.dtype), sketcher_3d)
         output_occ = (output_sdf <= 0.0).float()
         prim_exec_union_sdf = th.min(prim_exec_sdf, dim=0)[0]
         delta_sdf = th.maximum(output_sdf, - prim_exec_union_sdf)
@@ -191,7 +191,7 @@ def eval_shape(pred_program, measure_pack, semantic_loss_holder: SemanticLossHol
         sampled_expr = fetch_singular_expr(pred_program.sympy(), relaxed_eval=False)
         new_expr = recursive_sm_to_smg(sampled_expr.sympy())
         mat_expr, _ = recursive_gls_to_sysl(new_expr, ind=0, version="v1")
-        outputs = recursive_evaluate_mat_expr(mat_expr.tensor(), sketcher_3d)
+        outputs = recursive_evaluate_mat_expr(mat_expr.tensor(dtype=sketcher_3d.dtype), sketcher_3d)
         output_sdf, prim_ids = outputs[..., 0], outputs[..., 1]
         prim_ids[output_sdf > 0] = -1
 
@@ -231,22 +231,22 @@ def eval_shape(pred_program, measure_pack, semantic_loss_holder: SemanticLossHol
         Stats.record("avg_jump", avg_jump.item())
 
         # get primitive ids on surface points. 
+        if semantic_loss_holder is not None:
+            surface_samples_inp = sample_surface_proximal_points(input_mesh, n_points=AlgConf.N_SURFACE_POINTS_EVAL, jitter_sigma=0.0)
+            surface_samples_inp = th.from_numpy(surface_samples_inp).float().to(sketcher_3d.device)
+            semantic_loss_holder.load_point_features_GT(surface_samples_inp)
+            point_features = semantic_loss_holder.point_features
+            outputs = recursive_evaluate_mat_expr(mat_expr.tensor(dtype=sketcher_3d.dtype), sketcher_3d, coords=surface_samples_inp)
+            surface_output_sdf, surface_prim_ids = outputs[..., 0], outputs[..., 1]
 
-        surface_samples_inp = sample_surface_proximal_points(input_mesh, n_points=AlgConf.N_SURFACE_POINTS_EVAL, jitter_sigma=0.0)
-        surface_samples_inp = th.from_numpy(surface_samples_inp).float().to(sketcher_3d.device)
-        semantic_loss_holder.load_point_features_GT(surface_samples_inp)
-        point_features = semantic_loss_holder.point_features
-        outputs = recursive_evaluate_mat_expr(mat_expr.tensor(), sketcher_3d, coords=surface_samples_inp)
-        surface_output_sdf, surface_prim_ids = outputs[..., 0], outputs[..., 1]
+            kmeans_res = primitive_semantic_nmi_fast(point_features, surface_prim_ids.long())
+            Stats.record('nmi', kmeans_res['nmi'])
+            Stats.record('num_feat_clusters', kmeans_res['num_feat_clusters'])
 
-        kmeans_res = primitive_semantic_nmi_fast(point_features, surface_prim_ids.long())
-        Stats.record('nmi', kmeans_res['nmi'])
-        Stats.record('num_feat_clusters', kmeans_res['num_feat_clusters'])
-
-        res = primitive_feature_stats(point_features, surface_prim_ids.long(), k=1)
-        Stats.record('SEM_primitive_purity', res['intra_var_weighted'].mean().item())
-        Stats.record('SEM_primitive_knn_sep', res['knn_sep'].item())
-        Stats.record('SEM_inter_avg', res['inter_avg'].item())
+            res = primitive_feature_stats(point_features, surface_prim_ids.long(), k=1)
+            Stats.record('SEM_primitive_purity', res['intra_var_weighted'].mean().item())
+            Stats.record('SEM_primitive_knn_sep', res['knn_sep'].item())
+            Stats.record('SEM_inter_avg', res['inter_avg'].item())
 
 
         # SDF Error rate. 
@@ -260,9 +260,7 @@ def eval_shape(pred_program, measure_pack, semantic_loss_holder: SemanticLossHol
         outside_sdf_error = sdf_error[outside]
         outside_sdf_error_rate = outside_sdf_error.mean()
         Stats.record("outside_sdf_error", outside_sdf_error_rate.item())
-
-    # TBD Color
-    # Color Matching -> For each point proximal point color.
+    
 def get_param_cost(in_expr):
     current_cost = 0
     args = in_expr.sympy().get_args()
@@ -276,8 +274,8 @@ def get_param_cost(in_expr):
 def get_recon_measure(in_expr, sketcher, measure_pack: MeasurePack, convert_to_scalar=True):
     # Reset seeds for evaluation to ensure consistent random sampling
     reset_eval_seeds()
-
-    output_sdf = recursive_evaluate(in_expr.tensor(), sketcher, relaxed_eval=False)
+    in_expr = in_expr.tensor(dtype=sketcher.dtype)
+    output_sdf = recursive_evaluate(in_expr, sketcher, relaxed_eval=False)
     target_mesh = measure_pack.target_mesh
     target_sdf = measure_pack.target_sdf
     measure = measure_pack.measure
@@ -306,7 +304,7 @@ def get_recon_measure(in_expr, sketcher, measure_pack: MeasurePack, convert_to_s
             surface_adj_points = measure_pack.target_surface_pc
             target_occ = measure_pack.pt_target_occ
             target_sdf = measure_pack.pt_target_sdf
-        output_sdf = recursive_evaluate(in_expr.tensor(), sketcher, coords=surface_adj_points)
+        output_sdf = recursive_evaluate(in_expr, sketcher, coords=surface_adj_points)
     elif measure == "surface_iou_wt_curvature":
         if measure_pack.target_surface_pc is None:
             BVH = cubvh.cuBVH(target_mesh.vertices, target_mesh.faces)
@@ -329,7 +327,7 @@ def get_recon_measure(in_expr, sketcher, measure_pack: MeasurePack, convert_to_s
             curvature_weights = measure_pack.curvature_weights
             target_sdf = measure_pack.pt_target_sdf
 
-        output_sdf = recursive_evaluate(in_expr.tensor(), sketcher, coords=surface_adj_points)
+        output_sdf = recursive_evaluate(in_expr, sketcher, coords=surface_adj_points)
 
     elif measure == "surface_iou_wt_curvature_and_vox_iou":
         vox_target_occ = (target_sdf <= 0.0)
@@ -355,45 +353,45 @@ def get_recon_measure(in_expr, sketcher, measure_pack: MeasurePack, convert_to_s
             curvature_weights = measure_pack.curvature_weights
             pt_target_sdf = measure_pack.pt_target_sdf
 
-        pt_output_sdf = recursive_evaluate(in_expr.tensor(), sketcher, coords=surface_adj_points)
+        pt_output_sdf = recursive_evaluate(in_expr, sketcher, coords=surface_adj_points)
         
 
     if measure == "tversky":
         hard_output = (output_sdf <= 0.0)
-        measure = get_tversky_iou(hard_output, target_occ)
+        out_measure = get_tversky_iou(hard_output, target_occ)
     elif measure == "iou":
         hard_output = (output_sdf <= 0.0)
-        measure = get_iou(hard_output, target_occ)
+        out_measure = get_iou(hard_output, target_occ)
     elif measure  == "surface_iou":
         hard_output = (output_sdf <= 0.0)
-        measure = get_iou(hard_output, target_occ)
+        out_measure = get_iou(hard_output, target_occ)
     elif measure == "surface_tversky":
         hard_output = (output_sdf <= 0.0)
-        measure = get_tversky_iou(hard_output, target_occ)
+        out_measure = get_tversky_iou(hard_output, target_occ)
     elif measure == "surface_iou_wt_curvature":
         hard_output = (output_sdf <= 0.0)
-        measure = get_curvature_aware_iou(hard_output, target_occ, curvature_weights=curvature_weights)
+        out_measure = get_curvature_aware_iou(hard_output, target_occ, curvature_weights=curvature_weights)
     elif measure == "surface_iou_wt_curvature_and_vox_iou":
         pt_hard_output = (pt_output_sdf <= 0.0)
         vox_hard_output = (output_sdf <= 0.0)
-        measure_1 = get_curvature_aware_iou(pt_hard_output, pt_target_occ, curvature_weights=curvature_weights)
-        measure_2 = get_iou(vox_hard_output, vox_target_occ)
+        out_measure_1 = get_curvature_aware_iou(pt_hard_output, pt_target_occ, curvature_weights=curvature_weights)
+        out_measure_2 = get_iou(vox_hard_output, vox_target_occ)
         measure = (measure_1 + measure_2) / 2.0
     elif measure == "cd":
         try:
-            measure = get_cd_measure(output_sdf, target_pc, sketcher)
+            out_measure = get_cd_measure(output_sdf, target_pc, sketcher)
         except Exception as e:
             logger.error(f"Error evaluating CD: {e}")
-            measure = 0.0
+            out_measure = 0.0
     elif measure == "iqr_hausdorff":
         try:
-            measure = get_iqr_hausdorff_measure(output_sdf, target_pc, sketcher)
+            out_measure = get_iqr_hausdorff_measure(output_sdf, target_pc, sketcher)
         except Exception as e:
             logger.error(f"Error evaluating IQR Hausdorff: {e}")
-            measure = 0.0
+            out_measure = 0.0
     if convert_to_scalar and isinstance(measure, th.Tensor):
-        measure = measure.item()
-    return measure
+        out_measure = out_measure.item()
+    return out_measure
 
 def get_recon_measure_packed(expr_set, sketcher, measure_pack: MeasurePack):
     # Reset seeds for evaluation to ensure consistent random sampling
@@ -419,7 +417,7 @@ def get_recon_measure_packed(expr_set, sketcher, measure_pack: MeasurePack):
             target_occ = measure_pack.pt_target_occ
             target_sdf = measure_pack.pt_target_sdf
         for expr in expr_set:
-            cur_exec = recursive_evaluate(expr.tensor(), sketcher, coords=surface_adj_points)
+            cur_exec = recursive_evaluate(expr.tensor(dtype=sketcher.dtype), sketcher, coords=surface_adj_points)
             all_execs.append(cur_exec)
     elif measure_pack.measure == "surface_iou_wt_curvature":
         if measure_pack.target_surface_pc is None:
@@ -444,7 +442,7 @@ def get_recon_measure_packed(expr_set, sketcher, measure_pack: MeasurePack):
             target_sdf = measure_pack.pt_target_sdf
 
         for expr in expr_set:
-            cur_exec = recursive_evaluate(expr.tensor(), sketcher, coords=surface_adj_points)
+            cur_exec = recursive_evaluate(expr.tensor(dtype=sketcher.dtype), sketcher, coords=surface_adj_points)
             all_execs.append(cur_exec)
     elif measure_pack.measure == "surface_iou_wt_curvature_and_vox_iou":
 
@@ -470,16 +468,16 @@ def get_recon_measure_packed(expr_set, sketcher, measure_pack: MeasurePack):
             target_sdf = measure_pack.pt_target_sdf
         all_pt_execs = []
         for expr in expr_set:
-            cur_exec = recursive_evaluate(expr.tensor(), sketcher, coords=surface_adj_points)
+            cur_exec = recursive_evaluate(expr.tensor(dtype=sketcher.dtype), sketcher, coords=surface_adj_points)
             all_pt_execs.append(cur_exec)
         
         for expr in expr_set:
-            cur_exec = recursive_evaluate(expr.tensor(), sketcher, relaxed_eval=False)
+            cur_exec = recursive_evaluate(expr.tensor(dtype=sketcher.dtype), sketcher, relaxed_eval=False)
             all_execs.append(cur_exec)
         
     else:
         for expr in expr_set:
-            cur_exec = recursive_evaluate(expr.tensor(), sketcher, relaxed_eval=False)
+            cur_exec = recursive_evaluate(expr.tensor(dtype=sketcher.dtype), sketcher, relaxed_eval=False)
             all_execs.append(cur_exec)
         target_sdf = measure_pack.target_sdf
     all_execs = th.stack(all_execs, dim=0)
@@ -709,7 +707,7 @@ def emd_sinkhorn(pc1, pc2, eps=0.01):
     N = pc1.shape[0]
     M = th.cdist(pc1, pc2)
     a = th.ones(N, device=pc1.device) / N
-    b = th.ones(N, device=pc1.device) / N
+    b = th.ones(N, device=pc2.device) / N
     G = ot.sinkhorn(a, b, M, reg=eps)  # stays on GPU
     emd = (G * M).sum()
     return emd

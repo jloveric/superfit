@@ -5,21 +5,27 @@ import numpy as np
 import geolipi.symbolic as gls
 import superfit.symbolic as sps
 import cubvh
+from collections import defaultdict
+import trimesh
 from .param_conversion import params_from_variables
 from ..symbolic.utils import gather_primitives
 from ..utils.config import AlgorithmConfig as AlgConf
 from ..utils.stats import Stats
 from ..utils.logger import logger
+from ..utils.mesh_sdf import sdf_to_mesh
 from .utils import (perform_batched_stochastic_precondition, exponential_temperature_schedule, 
-                    recompute_sdf_from_BVH, get_mask_scaled_aabb)
+                    recompute_sdf_from_BVH, get_mask_scaled_aabb, quick_sample_points)
 from .curvature import get_points_and_weights
 from .measures import get_iou
 from .main_opt import make_optimizer, get_scale_factor
-from .compile_function import _params_from_variables_fast_sf
+from .compile_function import CompiledOps
+
 
 def run_optimization_loop_fast(init_opt_program, target_mesh, target, sketcher, 
                           variable_list, tensor_list, param_groups,
-                          compiled_ops):
+                          compiled_ops: CompiledOps = None, 
+                          render_mode: bool = False, render_iter: int = 0,
+                          *args, **kwargs):
     ## Prelims
     opt_program = init_opt_program
     has_temp = isinstance(opt_program, (sps.SuperFrustumPackedBatchedStochasticSU, 
@@ -81,7 +87,7 @@ def run_optimization_loop_fast(init_opt_program, target_mesh, target, sketcher,
     
     # Pre-allocate base_coords once
     base_coords = sketcher.get_base_coords()
-    base_coords = base_coords.unsqueeze(0).expand(1, base_coords.shape[0], base_coords.shape[1])
+    base_coords = base_coords.unsqueeze(0)#.expand(1, base_coords.shape[0], base_coords.shape[1])
 
     logger.debug(f"Creating BVH: {time.time() - st:.3f}s")
     if target_mask is not None:
@@ -100,11 +106,16 @@ def run_optimization_loop_fast(init_opt_program, target_mesh, target, sketcher,
     batched_surface_adj_points = None
     hard_target_surface_adj = None
     hard_target_surface_adj_fl = None
+    output_sdf = None
     
     # Pre-batch surface sampled points once (doesn't change)
-    batched_surface_sampled_points = surface_sampled_points.unsqueeze(0).expand(1, surface_sampled_points.shape[0], surface_sampled_points.shape[1])
+    batched_surface_sampled_points = surface_sampled_points.unsqueeze(0)# .expand(1, surface_sampled_points.shape[0], surface_sampled_points.shape[1])
     surface_sampled_points_size = surface_sampled_points.shape[0]
     
+    # Render Mode
+    if render_mode:
+        render_params = defaultdict(list)
+
     i = 0
     best_iter = 0
     while (i >= 0):
@@ -123,7 +134,7 @@ def run_optimization_loop_fast(init_opt_program, target_mesh, target, sketcher,
 
         # Get transformed parameters
         # transformed_params = params_from_variables(variable_list, tensor_list)
-        transformed_params = _params_from_variables_fast_sf(variable_list)
+        transformed_params = compiled_ops.param_from_variables(variable_list)
         transformed_params.append(temperature)
         
         # Renew surface points if needed (including first iteration)
@@ -131,11 +142,22 @@ def run_optimization_loop_fast(init_opt_program, target_mesh, target, sketcher,
             # Use in-place operations where possible
             perturbations = (th.rand_like(surface_sampled_points) - 0.5) * AlgConf.SURFACE_ADJ_PERTURBATION_SCALE
             surface_adj_points = surface_sampled_points + perturbations
+            if AlgConf.BIDIR and output_sdf is not None:
+                print("Sampling on pred mesh")
+                with th.no_grad():
+                    _, full_output_sdf = compiled_ops.compiled_assembly_execution(sketcher.get_base_coords().unsqueeze(0), transformed_params)
+                    pred_mesh = sdf_to_mesh(full_output_sdf[0].detach(), sketcher)
+                n_orig_points = int(surface_adj_points.shape[0] * 0.75) 
+                n_new_points = surface_adj_points.shape[0] - n_orig_points
+                _pred_sampled_points = quick_sample_points(pred_mesh, sketcher, n_points=n_new_points)
+                _pred_sampled_points = _pred_sampled_points + perturbations[n_orig_points:]
+                surface_adj_points = th.cat([surface_adj_points[:n_orig_points], _pred_sampled_points], dim=0)
+
             surface_sampled_sdf = recompute_sdf_from_BVH(surface_adj_points, BVH, mode="watertight")
             hard_target_surface_adj = (surface_sampled_sdf <= 0.0)
             hard_target_surface_adj_fl = hard_target_surface_adj.float()
             # Pre-batch once
-            batched_surface_adj_points = surface_adj_points.unsqueeze(0).expand(1, surface_adj_points.shape[0], surface_adj_points.shape[1])
+            batched_surface_adj_points = surface_adj_points.unsqueeze(0)# .expand(1, surface_adj_points.shape[0], surface_adj_points.shape[1])
             # TBD: Add points from Program Surface.
         
         # Concatenate coordinates more efficiently
@@ -191,7 +213,7 @@ def run_optimization_loop_fast(init_opt_program, target_mesh, target, sketcher,
                                                 output_surface_sdf,
                                                 primitive_sdfs, output_sdf, 
                                                 mask_shape, mask_surface, mask_surface_adj,
-                                                transformed_params, temperature, 
+                                                transformed_params, 
                                                 scale_factor, curvature_weights)
         total_loss.backward()
         
@@ -270,7 +292,9 @@ def run_optimization_loop_fast(init_opt_program, target_mesh, target, sketcher,
         
         if has_temp:
             transformed_params = transformed_params[:-1]
-
+        if render_mode and (i % render_iter) == 0:
+            for pos, param in enumerate(transformed_params):
+                render_params[pos].append(param.detach().cpu())
         if log_iter:
             cur_time = time.time()
             iteration_rate = (cur_time - start_time) / (i + 1e-10)
@@ -292,6 +316,9 @@ def run_optimization_loop_fast(init_opt_program, target_mesh, target, sketcher,
     Stats.record("time_total", time.time() - start_time)
     Stats.record("n_iters", i)
     Stats.record("iterations_without_improvement", iterations_without_improvement)
-    
+    if render_mode:
+        for pos, param in render_params.items():
+            render_params[pos] = th.stack(param)
+        Stats.record("render_params", render_params, log=False)
     return best_program
 

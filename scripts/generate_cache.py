@@ -1,65 +1,183 @@
-
 import os
-import time
+import argparse
 import torch as th
+import geolipi.symbolic as gls
 import superfit.symbolic as sps
-import torch._dynamo as dynamo
+from geolipi.torch_compute import Sketcher
 from superfit.utils.config import AlgorithmConfig as AlgConf
 from superfit.utils.logger import logger
-# from .fast_opt import run_optimization_loop
-from geolipi.torch_compute.unroll_expression import unroll_expression
-# from ..torch_compute.triton_convert import batched_sf_packed_stochastic_eval, _sdf_smooth_union_pair
-from superfit.torch_compute.batched_primitives import batched_sf_packed_stochastic_eval, _sdf_smooth_union_pair, batched_sf_packed_stochastic_su_eval
+from superfit.utils.constants import AOT_ARTIFACT_DIR
+from superfit.optim.compile_function import compile_cached_with_dummy_opt
+from superfit.optim.primitive_registry import HANDLER_REGISTRY
+import superfit.utils.config as config_options
+
+# Constants from prim_initialize.py
+ROUNDNESS_INIT_VAL = 0.4
+ONION_INIT_VAL = 0.4
+SCALE_INIT_VAL = 0.7
+BULGE_INIT_VAL = 0.01
+SMOOTH_INIT_VAL = 0.01
+VARAXIS_INIT_VAL = 2.5
 
 
-def compile_program():
-    # prim_function = map_to_prim_inner_fn[in_program.__class__]
-    # return batched_sf_packed_stochastic_su_eval
-    dtype = AlgConf.OPT_DTYPE
-    device = "cuda"
-    for BATCH_SIZE in range(2, 100):
-        logger.info("================================================")
-        logger.info(f"Generating Cache for Batch size: {BATCH_SIZE}")
-        logger.info("================================================")
-        
-        prim_function = batched_sf_packed_stochastic_eval
-        PC_SIZE = 200_000 + 128 ** 3
-        temperature = 1.0
-        artifact_file = AlgConf.AOT_ARTIFACT_FILE
-        _coords = th.randn(1, PC_SIZE, 3, dtype=dtype, device=device).clone().detach().requires_grad_(False)
-        _params = th.randn(BATCH_SIZE, 14, dtype=dtype, device=device).clone().detach().requires_grad_(True)
-        _su_vals = th.randn(BATCH_SIZE-1, 1, dtype=dtype, device=device).clone().detach().requires_grad_(True)
-        _logits = th.randn(BATCH_SIZE, 2, dtype=dtype, device=device).clone().detach().requires_grad_(True)
-        _temperature = th.randn(1, dtype=dtype, device=device).clone().detach().requires_grad_(False)
-        
-
-
-        comp_func = th.compile(batched_sf_packed_stochastic_su_eval, 
-            backend="inductor",
-            mode="max-autotune",
-            # mode="max-autotune-no-cudagraphs",
-            dynamic=False,
-            fullgraph=True,
-            # options={"triton.cudagraphs": False},
+def create_simple_expression(sketcher):
+    """
+    Create a simple expression with 2 primitives for cache generation.
+    """
+    version = getattr(sps, AlgConf.PRIM_TYPE)
+    
+    # Create two simple primitives with basic parameters
+    # Primitive 1: centered at (-0.3, 0, 0)
+    scale1 = (0.3, 0.3, 0.3)
+    center1 = (-0.3, 0.0, 0.0)
+    rotation1 = (0.0, 0.0, 0.0)
+    
+    # Primitive 2: centered at (0.3, 0, 0)
+    scale2 = (0.3, 0.3, 0.3)
+    center2 = (0.3, 0.0, 0.0)
+    rotation2 = (0.0, 0.0, 0.0)
+    
+    # Create primitives based on type
+    if issubclass(version, sps.SuperFrustum):
+        prim1 = version(
+            scale1, 
+            (ROUNDNESS_INIT_VAL,), 
+            (SMOOTH_INIT_VAL,), 
+            (SCALE_INIT_VAL,), 
+            (BULGE_INIT_VAL,), 
+            (ONION_INIT_VAL,)
         )
-        
-        # dynamo.mark_dynamic(_coords, 1)
-        # dynamo.mark_dynamic(_params, 0, min=2, max=100)
-        # dynamo.mark_dynamic(_logits, 0, min=2, max=100)
-        # dynamo.mark_dynamic(_su_vals, 0, min=1, max=99)
+        prim2 = version(
+            scale2, 
+            (ROUNDNESS_INIT_VAL,), 
+            (SMOOTH_INIT_VAL,), 
+            (SCALE_INIT_VAL,), 
+            (BULGE_INIT_VAL,), 
+            (ONION_INIT_VAL,)
+        )
+    elif issubclass(version, sps.SolidSF):
+        init_logits = (0.0, 0.0, 0.0, 0.0)
+        prim1 = version(
+            scale1, 
+            (ROUNDNESS_INIT_VAL,), 
+            (SMOOTH_INIT_VAL,), 
+            (SCALE_INIT_VAL,), 
+            (BULGE_INIT_VAL,), 
+            (ONION_INIT_VAL,),
+            init_logits
+        )
+        prim2 = version(
+            scale2, 
+            (ROUNDNESS_INIT_VAL,), 
+            (SMOOTH_INIT_VAL,), 
+            (SCALE_INIT_VAL,), 
+            (BULGE_INIT_VAL,), 
+            (ONION_INIT_VAL,),
+            init_logits
+        )
+    elif issubclass(version, sps.VarAxisSF):
+        init_logits = (VARAXIS_INIT_VAL, -VARAXIS_INIT_VAL, -VARAXIS_INIT_VAL)
+        prim1 = version(
+            scale1, 
+            (ROUNDNESS_INIT_VAL,), 
+            (SMOOTH_INIT_VAL,), 
+            (SCALE_INIT_VAL,), 
+            (BULGE_INIT_VAL,), 
+            (ONION_INIT_VAL,),
+            init_logits
+        )
+        prim2 = version(
+            scale2, 
+            (ROUNDNESS_INIT_VAL,), 
+            (SMOOTH_INIT_VAL,), 
+            (SCALE_INIT_VAL,), 
+            (BULGE_INIT_VAL,), 
+            (ONION_INIT_VAL,),
+            init_logits
+        )
+    else:
+        raise ValueError(f"Unsupported primitive type: {version}")
+    
+    # Apply rotation and translation
+    prim1 = gls.AxisAngleRotate3D(prim1, rotation1)
+    prim1 = gls.Translate3D(prim1, center1)
+    
+    prim2 = gls.AxisAngleRotate3D(prim2, rotation2)
+    prim2 = gls.Translate3D(prim2, center2)
+    
+    # Wrap with PrimitiveMarker
+    prim1 = sps.PrimitiveMarker(prim1)
+    prim2 = sps.PrimitiveMarker(prim2)
+    
+    # Combine with SmoothUnion
+    if AlgConf.SMOOTHEN:
+        expr = gls.SmoothUnion(prim1, prim2, (SMOOTH_INIT_VAL,))
+    else:
+        expr = gls.SmoothUnion(prim1, prim2, (0.0,))
+    
+    return expr
 
-        start_time = time.time()
-        res1, res2 = comp_func(_coords, _params, _su_vals, _logits, _temperature)
-        loss = res1.sum() + res2.sum()
-        loss.backward()
-        real_artifact_file = artifact_file.replace(".pt", f"_{BATCH_SIZE}.pt")
-        logger.info(f"Saving artifacts to {real_artifact_file}")
-        artifacts = th.compiler.save_cache_artifacts()
-        assert artifacts is not None
-        artifact_bytes, cache_info = artifacts
-        th.save(artifact_bytes, real_artifact_file)
-        th.cuda.empty_cache()
-        th._dynamo.reset()
+
+def generate_cache_for_ablation(ablation: int):
+    """
+    Generate cache for a specific ablation number.
+    """
+    logger.info(f"Generating cache for ablation {ablation}")
+    
+    # Setup config based on ablation (similar to generate_on_testset.py)
+    config_options.main_setting()
+    
+    if ablation == 0:
+        pass
+    elif ablation == 6:
+        config_options.low_cost_mode()
+    elif ablation == 7:
+        AlgConf.PRIM_TYPE = "VarAxisSF"
+    
+    # Set the artifact file path (same as in generate_on_testset.py line 56)
+    AlgConf.AOT_ARTIFACT_FILE = os.path.join(AOT_ARTIFACT_DIR, f"aot_artifact_{ablation}.pt")
+    
+    # Ensure artifact directory exists
+    artifact_dir = os.path.dirname(AlgConf.AOT_ARTIFACT_FILE)
+    if not os.path.exists(artifact_dir):
+        os.makedirs(artifact_dir, exist_ok=True)
+        logger.info(f"Created artifact directory: {artifact_dir}")
+    
+    # Create sketcher
+    sketcher = Sketcher(resolution=AlgConf.OPT_RESOLUTION, n_dims=3, dtype=AlgConf.OPT_DTYPE)
+    
+    # Create simple expression with 2 primitives
+    logger.info("Creating simple expression with 2 primitives")
+    expr = create_simple_expression(sketcher)
+    
+    # Convert to tensor format
+    expr = expr.tensor(dtype=AlgConf.OPT_DTYPE)
+    
+    # Get handler (same as in entry.py)
+    version = getattr(sps, AlgConf.PRIM_TYPE)
+    handler = HANDLER_REGISTRY[version]
+    assert handler is not None, f"No handler found for {AlgConf.PRIM_TYPE}"
+    
+    logger.info(f"Using handler: {handler.__class__.__name__}")
+    logger.info(f"Artifact file: {AlgConf.AOT_ARTIFACT_FILE}")
+    
+    # Generate cache using compile_cached_with_dummy_opt
+    logger.info("Compiling with dummy optimization to generate cache...")
+    AlgConf.SAVE_JIT_CACHE = True
+    AlgConf.OVERWRITE_JIT_CACHE = True
+    compiled_ops = compile_cached_with_dummy_opt(expr, sketcher, handler, torch_compile=True)
+    
+    logger.info(f"Cache generation complete! Artifacts saved to: {AlgConf.AOT_ARTIFACT_FILE}")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Generate cache for different ablations")
+    parser.add_argument("--ablation", type=int, required=True, help="Ablation number")
+    
+    args = parser.parse_args()
+    
+    generate_cache_for_ablation(args.ablation)
+
 
 if __name__ == "__main__":
-    compile_program()
+    main()

@@ -11,14 +11,15 @@ from ..optim.entry import optimize_primitive_assembly
 from ..optim.measures import get_iou
 from ..utils.mesh_sdf import target_cleanup, CLEAN_UP_DELTA
 from .prim_initialize import get_init_prim_program, simple_cleanup_volumetric
-from .prim_initialize import generate_prim_initializations
+from .estimate_init_params import generate_prim_initializations
 import superfit.symbolic as sps
-from .eval import get_recon_measure, MeasurePack
+from .eval_tools import get_recon_measure, MeasurePack
 from .decompose_msd import msd_new
 from ..utils.config import AlgorithmConfig as AlgConf
 from ..utils.stats import Stats
 from ..utils.logger import logger
 from .prune import main_pruning_pipeline
+from .eval_tools import eval_shape
 
 def get_delta(n_prims):
     inverse_rate = n_prims
@@ -26,14 +27,15 @@ def get_delta(n_prims):
     desired_prob = min(desired_prob, 0.975) # Should we?
     delta = np.log(desired_prob/ (1 - desired_prob))
     return delta
-
+    
 def resfit(target_mesh, 
     save_file=None,
     early_stop=True,
-    record_param=False,
+    record_param=False, 
+    perform_eval=True,
     ):
 
-    prune_sketcher = Sketcher(resolution=AlgConf.PRUNE_RESOLUTION, dtype=th.float16, n_dims=3)
+    prune_sketcher = Sketcher(resolution=AlgConf.PRUNE_RESOLUTION, dtype=AlgConf.OPT_DTYPE, n_dims=3)
     decompose_sketcher = Sketcher(resolution=AlgConf.DECOMPOSE_RESOLUTION, dtype=th.float16, n_dims=3)
     optim_sketcher = Sketcher(resolution=AlgConf.OPT_RESOLUTION, n_dims=3, dtype=AlgConf.OPT_DTYPE)
     # target = get_target_mesh2sdf(mesh)
@@ -64,7 +66,6 @@ def resfit(target_mesh,
 
     primitives = []
     init_start_time = time.time()
-    n_prims_prev = 0
     last_run = False
     while cur_iter < AlgConf.MPS_MAX_ITER:
         with Stats.scope(f"iter_{cur_iter}"):
@@ -81,6 +82,8 @@ def resfit(target_mesh,
 
             with Stats.timer("initialization"):
                 with th.no_grad():
+                    # HACK: Helps with thin sheets. 
+                    # masked_target_sdf = masked_target_sdf - 0.005
                     pruned_parts, _ = msd_new(masked_target_sdf, decompose_sketcher, **AlgConf.DECOMPOSE_CONFIG)
                     if len(pruned_parts) == 0:
                         logger.info("===No parts found - Reached Stopping Criteria===")
@@ -123,13 +126,13 @@ def resfit(target_mesh,
                         running_program = running_program.tensor(dtype=prune_sketcher.dtype)
                         measure_pack.target_sdf = target_sdf_prune
                         measure_pack.reset()
-                        running_program = main_pruning_pipeline(running_program, prune_sketcher, measure_pack)
+                        best_running_program, running_program = main_pruning_pipeline(running_program, prune_sketcher, measure_pack)
                 Stats.record("pruned_program", running_program.sympy().state(), log=False)
                 Stats.record("pruned_recon_measure", Stats.get("pruning.best_recon_measure"))
                 Stats.record("pruned_n_prim", Stats.get("pruning.best_n_prim"))
                 Stats.record("pruned_obj", Stats.get("pruning.best_obj"))
                 if Stats.get("pruned_obj") > cur_best_obj:
-                    cur_best_program = running_program
+                    cur_best_program = best_running_program
                     cur_best_obj = Stats.get("pruned_obj")
             else:
                 Stats.record("pruned_recon_measure", Stats.get("opt_recon_measure"))
@@ -152,6 +155,19 @@ def resfit(target_mesh,
             Stats.record("best_program", best_program.sympy().state(), log=False)
             Stats.record("running_program", running_program.sympy().state(), log=False)
             Stats.record("best_iter", best_iter)
+            # Better way to handle failure comes here. 
+            # Mask target the occupied regions. 
+            masked_target_sdf = get_masked(running_program, decompose_target_sdf.clone(), decompose_sketcher)
+            if AlgConf.DECOMPOSE_MODE == "COACD":
+                # Other wise coacd fails to get good primitives. 
+                masked_target_sdf = masked_target_sdf - CLEAN_UP_DELTA
+                masked_target_sdf = target_cleanup(masked_target_sdf, decompose_sketcher, AlgConf.MIN_VOLUME_LIMIT_FOR_REINIT)
+            masked_target_sdf = renorm_target_sdf(masked_target_sdf, decompose_sketcher)
+            primitives = gather_primitives(running_program)
+            n_prims_main = len(primitives)
+            logger.info(f"Cur Iter: {cur_iter}, Best Recon Measure: {best_recon_measure:.3f}, Best Obj: {best_obj:.3f}, program_size: {len(primitives)}, best_iter: {best_iter}")
+            total_time = time.time() - init_start_time
+            Stats.record("total_time", total_time)
             
             if save_file is not None:
                 iter_stats = Stats.get_dict()  # Get current scope (iter_{cur_iter})
@@ -160,18 +176,7 @@ def resfit(target_mesh,
                 cur_save_file = save_file.replace(".pkl", f"_{cur_iter}.pkl")
                 cPickle.dump(iter_stats, open(cur_save_file, "wb"))
                 logger.info(f"Saved to {cur_save_file}")
-        # Better way to handle failure comes here. 
-        # Mask target the occupied regions. 
-        masked_target_sdf = get_masked(running_program, decompose_target_sdf.clone(), decompose_sketcher)
-        if AlgConf.DECOMPOSE_MODE == "COACD":
-            # Other wise coacd fails to get good primitives. 
-            masked_target_sdf = masked_target_sdf - CLEAN_UP_DELTA
-            masked_target_sdf = target_cleanup(masked_target_sdf, decompose_sketcher, AlgConf.MIN_VOLUME_LIMIT_FOR_REINIT)
-        masked_target_sdf = renorm_target_sdf(masked_target_sdf, decompose_sketcher)
-        primitives = gather_primitives(running_program)
-        n_prims_main = len(primitives)
-        logger.info(f"Cur Iter: {cur_iter}, Best Recon Measure: {best_recon_measure:.3f}, Best Obj: {best_obj:.3f}, program_size: {len(primitives)}, best_iter: {best_iter}")
-        
+
         if masked_target_sdf.min() > 0.0:
             logger.info("Target SDF is fully occupied - stopping")
 
@@ -207,7 +212,7 @@ def resfit(target_mesh,
         if AlgConf.RUN_LAST_OPT and last_run:
             logger.info("==================== Finished running last optimization ====================")
             break
-        n_prims_prev = n_prims_main
+
         cur_iter += 1
     total_time = time.time() - init_start_time
     Stats.record("total_time", total_time)
@@ -219,7 +224,7 @@ def resfit(target_mesh,
         Stats.record("best_iou", 0)
         best_program, running_program = None, None
     else:
-        best_out = recursive_evaluate(best_program.tensor(), decompose_sketcher)
+        best_out = recursive_evaluate(best_program.tensor(dtype=prune_sketcher.dtype), prune_sketcher)
         hard_out = (best_out <= 0).bool()
         hard_target = (decompose_target_sdf <= 0).bool()
         best_iou = get_iou(hard_out, hard_target)
@@ -229,6 +234,11 @@ def resfit(target_mesh,
         Stats.record("best_recon_measure", best_recon_measure)
     
     logger.info(f"===========MPS: Time taken: {total_time:.3f}s ===========")
+
+    if perform_eval:
+        with Stats.scope("evaluation"):
+            eval_shape(best_program, measure_pack, None)
+
 
     return best_program, running_program
 

@@ -4,3 +4,4 @@ from .torch_compute import *
 from .shader import *
 from .utils import *
 from .optim import *
+from .mat_opt import *

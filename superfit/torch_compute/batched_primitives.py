@@ -1,4 +1,5 @@
 import torch as th
+import torch.nn.functional as F
 from .primitives import map_arc_bulge
 import superfit.symbolic as sps
 from geolipi.torch_compute.maps import PRIMITIVE_MAP
@@ -159,7 +160,7 @@ def batched_sf_packed_su_eval(coords, params, su_vals):
 def batched_sf_packed_stochastic_eval(coords, params, logits, temperature):
     # B, N
     outputs = batched_sf_packed_eval(coords, params)
-    g  = sample_gumbel(logits.shape, device=logits.device)
+    g = sample_gumbel(logits.shape, device=logits.device, dtype=logits.dtype)
     w  = th.softmax((logits + g) / temperature, dim=-1)  # (..., 2)
 
     # Unpack weights explicitly
@@ -194,7 +195,7 @@ def batched_solid_sf_packed_eval(coords, params, temperature):
     logits = params[..., 14:18]
 
     
-    g  = sample_gumbel(logits.shape, device=logits.device)
+    g  = sample_gumbel(logits.shape, device=logits.device, dtype=logits.dtype)
     w  = th.softmax((logits + g) / temperature, dim=-1)  # (..., 2)
     w_cube = w[..., 0:1]
     w_sphere = w[..., 1:2]
@@ -225,7 +226,7 @@ def batched_solid_sf_packed_su_eval(coords, params, su_vals, temperature):
 def batched_solid_sf_packed_stochastic_eval(coords, params, logits, temperature):
     # B, N
     outputs = batched_solid_sf_packed_eval(coords, params, temperature)
-    g  = sample_gumbel(logits.shape, device=logits.device)
+    g  = sample_gumbel(logits.shape, device=logits.device, dtype=logits.dtype)
     w  = th.softmax((logits + g) / temperature, dim=-1)  # (..., 2)
     w0 = w[..., 0:1]
     w1 = w[..., 1:2]
@@ -241,15 +242,95 @@ def batched_solid_sf_packed_stochastic_su_eval(coords, params, su_vals, logits, 
         out = _sdf_smooth_union_pair(out, output[i], k_reshaped)
     return (output, out)
 # Other option - just update the tables used in the origin code. 
+
+
+def batched_varaxis_sf_packed_eval(coords: th.Tensor,
+                                              params: th.Tensor,
+                                              temperature: float):
+    """
+    coords: (B, M, 3)
+    params: (B, K) where last 3 entries are logits for {xyz, yzx, zxy}
+            and size is at params[..., 6:9] in the base part.
+    temperature: float
+
+    Forward: hard per-batch axis permutation (xyz / yzx / zxy)
+    Backward: straight-through (grad flows as if soft mixture)
+    """
+    logits = params[..., -3:]      # (B,3)
+    base   = params[..., :-3]      # (B,K-3)
+
+    # ----- straight-through gumbel-softmax: one-hot in forward, soft in backward
+    y = F.gumbel_softmax(logits, tau=temperature, hard=True, dim=-1)  # (B,3)
+
+    # ----- permutation matrices A such that: new = old @ A  (matches gather old[..., perm])
+    # 0: xyz -> [0,1,2]
+    # 1: yzx -> [1,2,0]
+    # 2: zxy -> [2,0,1]
+    # Each A has A[perm[j], j] = 1
+    P_stack = coords.new_tensor([
+        [[1,0,0],[0,1,0],[0,0,1]],  # xyz
+        [[0,0,1],[1,0,0],[0,1,0]],  # yzx
+        [[0,1,0],[0,0,1],[1,0,0]],  # zxy
+    ])  # (3,3,3), float dtype for matmul
+
+    # Build per-batch permutation matrix (B,3,3). Forward it's exactly one of the above.
+    P = th.einsum('bk,kij->bij', y, P_stack)  # (B,3,3)
+
+    # ----- apply permutation to coords and size (single matmul each)
+    coords_p = th.matmul(coords, P)  # (B,M,3)
+
+    size = base[..., 6:9]  # (B,3)
+    size_p = th.matmul(size.unsqueeze(1), P).squeeze(1)  # (B,3)
+
+    # ----- rebuild params (avoid base.clone())
+    new_base = th.cat([base[..., :6], size_p, base[..., 9:]], dim=-1)
+
+    return batched_sf_packed_eval(coords_p, new_base)
+
+def batched_varaxis_sf_packed_stochastic_eval(coords, params, logits, temperature):
+    # B, N
+    outputs = batched_varaxis_sf_packed_eval(coords, params, temperature)
+    g  = sample_gumbel(logits.shape, device=logits.device, dtype=logits.dtype)
+    w  = th.softmax((logits + g) / temperature, dim=-1)  # (..., 2)
+    w0 = w[..., 0:1]
+    w1 = w[..., 1:2]
+    out = outputs * w0 + w1
+    return out
+
+def batched_varaxis_sf_packed_su_eval(coords, params, su_vals, temperature):
+    output = batched_varaxis_sf_packed_eval(coords, params, temperature)
+    K = output.shape[0]
+    out = output[0]
+    for i in range(1, K):
+        k_reshaped = su_vals[i-1].unsqueeze(-1)
+        out = _sdf_smooth_union_pair(out, output[i], k_reshaped)
+    return (output, out)
+
+
+def batched_varaxis_sf_packed_stochastic_su_eval(coords, params, su_vals, logits, temperature):
+    output = batched_varaxis_sf_packed_stochastic_eval(coords, params, logits, temperature)
+    K = output.shape[0]
+    out = output[0]
+    for i in range(1, K):
+        k_reshaped = su_vals[i-1].unsqueeze(-1) * (temperature ** 2)
+        out = _sdf_smooth_union_pair(out, output[i], k_reshaped)
+    return (output, out)
+
 function_map = {
     sps.SuperFrustumPackedBatched: batched_sf_packed_eval,
     sps.SuperFrustumPackedBatchedStochastic: batched_sf_packed_stochastic_eval,
-    sps.SolidSFPackedBatched: batched_solid_sf_packed_eval,
-    sps.SolidSFPackedBatchedStochastic: batched_solid_sf_packed_stochastic_eval,
     sps.SuperFrustumPackedBatchedSU: batched_sf_packed_su_eval,
     sps.SuperFrustumPackedBatchedStochasticSU: batched_sf_packed_stochastic_su_eval,
+    # SolidSF batched variants
+    sps.SolidSFPackedBatched: batched_solid_sf_packed_eval,
+    sps.SolidSFPackedBatchedStochastic: batched_solid_sf_packed_stochastic_eval,
     sps.SolidSFPackedBatchedSU: batched_solid_sf_packed_su_eval,
     sps.SolidSFPackedBatchedStochasticSU: batched_solid_sf_packed_stochastic_su_eval,
+    # VarAxisSF batched variants
+    sps.VarAxisSFPackedBatched: batched_varaxis_sf_packed_eval,
+    sps.VarAxisSFPackedBatchedStochastic: batched_varaxis_sf_packed_stochastic_eval,
+    sps.VarAxisSFPackedBatchedSU: batched_varaxis_sf_packed_su_eval,
+    sps.VarAxisSFPackedBatchedStochasticSU: batched_varaxis_sf_packed_stochastic_su_eval,
 
 }
 PRIMITIVE_MAP.update(function_map)

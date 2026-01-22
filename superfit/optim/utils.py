@@ -5,14 +5,16 @@ import trimesh
 import open3d as o3d
 from ..utils.config import AlgorithmConfig as AlgConf, reset_eval_seeds
 
-
 def quick_sample_points(mesh, sketcher, n_points=10000):
-
-
     # Ensure normals exist (needed only if you want smooth normals)
-    mesh.rezero()          # optional, centers if needed
-    mesh.remove_unreferenced_vertices()
+    # Sample uniformly on the surface
+    points, _ = trimesh.sample.sample_surface(mesh, n_points)
+    points = th.from_numpy(points).float().to(sketcher.device)
+    return points
 
+
+def quick_sample_points_and_normals(mesh, sketcher, n_points=10000):
+    # Ensure normals exist (needed only if you want smooth normals)
     # Sample uniformly on the surface
     points, faces = trimesh.sample.sample_surface_even(mesh, n_points)
 
@@ -201,7 +203,7 @@ def sample_surface_proximal_points(mesh: trimesh.Trimesh, n_points=10000, jitter
     return points
 
 
-def perform_batched_stochastic_precondition(base_coords, i, base_iters, init_val=AlgConf.STOCHASTIC_PRECONDITION_INIT_VAL):
+def perform_batched_stochastic_precondition(base_coords, i, base_iters, init_val=AlgConf.STOCHASTIC_PRECONDITION_INIT_VAL_LOWER):
     final_val = 0
     frac = min(i / (base_iters), 1.0)
     alpha = init_val * (1 - frac) + final_val * frac

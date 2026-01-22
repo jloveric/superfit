@@ -8,7 +8,7 @@ import geolipi.symbolic as gls
 from geolipi.torch_compute.evaluate_expression import recursive_evaluate
 
 from ..symbolic.utils import inject_temp_param, fetch_singular_expr, gather_primitives
-from .eval import get_recon_measure, get_recon_measure_packed, MeasurePack
+from .eval_tools import get_recon_measure, get_recon_measure_packed, MeasurePack
 from ..symbolic.utils import gather_instance_dropout_alternatives, gather_smooth_union_ops, generate_from_sm_ops_and_primitives
 from ..utils.config import AlgorithmConfig as AlgConf, initialize_seeds
 from ..utils.stats import Stats
@@ -51,28 +51,46 @@ def main_pruning_pipeline(in_expr, sketcher, measure_pack):
         Stats.record("prune_tiny_parts_n_prim", best_n_prim)
         Stats.record("prune_tiny_parts_obj", best_obj)
         
-        sel_opt_program, best_recon_measure, best_n_prim, best_obj = prune_tiny_parts_v2(sel_opt_program, sketcher, measure_pack)
-        Stats.record("prune_tiny_parts_v2_recon_measure", best_recon_measure)
-        Stats.record("prune_tiny_parts_v2_n_prim", best_n_prim)
-        Stats.record("prune_tiny_parts_v2_obj", best_obj)
-        
-        cur_recon_measure = get_recon_measure(sel_opt_program, sketcher, measure_pack)
-        cur_n_prim = len(gather_primitives(sel_opt_program))
-        cur_obj = cur_recon_measure + measure_pack.len_weight * cur_n_prim
-        logger.info(f"Final {measure_pack.measure}: {cur_recon_measure:.6f}")
-        logger.info(f"Final OBJ: {cur_obj:.6f}")
-        logger.info(f"Final program size: {cur_n_prim}")
+        sel_opt_program_v2, best_recon_measure_v2, best_n_prim_v2, best_obj_v2 = prune_tiny_parts_v2(sel_opt_program, sketcher, measure_pack)
+        Stats.record("prune_tiny_parts_v2_recon_measure", best_recon_measure_v2)
+        Stats.record("prune_tiny_parts_v2_n_prim", best_n_prim_v2)
+        Stats.record("prune_tiny_parts_v2_obj", best_obj_v2)
+
+        Stats.record("running_recon_measure", best_recon_measure_v2)
+        Stats.record("running_n_prim", best_n_prim_v2)
+        Stats.record("running_obj", best_obj_v2)
+
         real_measure = measure_pack.measure
         measure_pack.measure = "iou"
+        cur_iou_v2 = get_recon_measure(sel_opt_program_v2, sketcher, measure_pack)
         cur_iou = get_recon_measure(sel_opt_program, sketcher, measure_pack)
-        best_obj = cur_recon_measure + measure_pack.len_weight * cur_n_prim
         measure_pack.measure = real_measure
-        Stats.record("best_iou", cur_iou)
-        Stats.record("best_recon_measure", cur_recon_measure)
-        Stats.record("best_n_prim", cur_n_prim)
+        Stats.record("running_iou", cur_iou_v2)
+
+        if best_obj_v2 > best_obj:
+            best_program = sel_opt_program_v2
+            best_recon_measure = best_recon_measure_v2
+            best_n_prim = best_n_prim_v2
+            best_obj = best_obj
+            best_iou = cur_iou_v2
+        else:
+            best_program = sel_opt_program
+            best_iou = cur_iou
+        Stats.record("best_iou", best_iou)
+        Stats.record("best_recon_measure", best_recon_measure)
+        Stats.record("best_n_prim", best_n_prim)
         Stats.record("best_obj", best_obj)
+
+
+        logger.info(f"Final {measure_pack.measure}: {best_recon_measure:.6f}")
+        logger.info(f"Final IOU: {best_iou:.6f}")
+        logger.info(f"Final OBJ: {best_obj:.6f}")
+        logger.info(f"Final program size: {best_n_prim}")
+        # real_measure = measure_pack.measure
+        # measure_pack.measure = "iou"
+
     
-    return sel_opt_program
+    return best_program, sel_opt_program_v2
     
 
 def sampling_based_pruning(in_expr, sketcher, measure_pack, n_samples=100):
@@ -107,7 +125,7 @@ def sampling_based_pruning(in_expr, sketcher, measure_pack, n_samples=100):
     # Batch eval:
     recon_measures, n_prims, objs = batch_eval(expr_set, measure_pack, sketcher)
     best_ind = th.argmax(objs)
-    best_expr = expr_set[best_ind].tensor()
+    best_expr = expr_set[best_ind].tensor(dtype=sketcher.dtype)
     logger.info(f"Best {measure_pack.measure}: {recon_measures[best_ind]:.6f}")
     logger.info(f"Best OBJ: {objs[best_ind]:.6f}")
     logger.info(f"Best program size: {n_prims[best_ind]}")
@@ -130,7 +148,7 @@ def top_down_pruning(in_expr, sketcher, measure_pack):
     top_down_alternatives.append(in_expr)
     recon_measures, n_prims, objs = batch_eval(top_down_alternatives, measure_pack, sketcher)
     best_ind = th.argmax(objs)
-    best_expr = top_down_alternatives[best_ind].tensor()
+    best_expr = top_down_alternatives[best_ind].tensor(dtype=sketcher.dtype)
     logger.info(f"Best {measure_pack.measure}: {recon_measures[best_ind]:.6f}")
     logger.info(f"Best OBJ: {objs[best_ind]:.6f}")
     logger.info(f"Best program size: {n_prims[best_ind]}")
@@ -339,7 +357,7 @@ def prune_tiny_parts(in_expr, sketcher, measure_pack):
     n_prims = []
     all_execs = []
     for expr in primitives:
-        cur_exec = recursive_evaluate(expr.tensor(), sketcher, relaxed_eval=False)
+        cur_exec = recursive_evaluate(expr.tensor(dtype=sketcher.dtype), sketcher, relaxed_eval=False)
         all_execs.append(cur_exec)
         n_prims.append(len(gather_primitives(expr)))
     all_execs = th.stack(all_execs, dim=0)
@@ -416,7 +434,7 @@ def prune_tiny_parts_v2(in_expr, sketcher, measure_pack):
     n_prims = []
     all_execs = []
     for expr in primitives:
-        cur_exec = recursive_evaluate(expr.tensor(), sketcher, relaxed_eval=False)
+        cur_exec = recursive_evaluate(expr.tensor(dtype=sketcher.dtype), sketcher, relaxed_eval=False)
         all_execs.append(cur_exec)
         n_prims.append(len(gather_primitives(expr)))
     all_execs = th.stack(all_execs, dim=0)
