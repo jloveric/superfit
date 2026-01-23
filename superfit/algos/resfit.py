@@ -36,7 +36,7 @@ def resfit(target_mesh,
     ):
 
     prune_sketcher = Sketcher(resolution=AlgConf.PRUNE_RESOLUTION, dtype=AlgConf.OPT_DTYPE, n_dims=3)
-    decompose_sketcher = Sketcher(resolution=AlgConf.DECOMPOSE_RESOLUTION, dtype=th.float16, n_dims=3)
+    decompose_sketcher = Sketcher(resolution=AlgConf.DECOMPOSE_RESOLUTION, dtype=AlgConf.OPT_DTYPE, n_dims=3)
     optim_sketcher = Sketcher(resolution=AlgConf.OPT_RESOLUTION, n_dims=3, dtype=AlgConf.OPT_DTYPE)
     # target = get_target_mesh2sdf(mesh)
     running_program, best_program = None, None
@@ -60,6 +60,7 @@ def resfit(target_mesh,
     measure_pack = MeasurePack(
         measure=AlgConf.PRUNE_METRIC,
         target_mesh=target_mesh,
+        original_mesh=target_mesh,
         target_sdf=target_sdf_prune,
         len_weight=AlgConf.MPS_LEN_WEIGHT
     )
@@ -226,7 +227,7 @@ def resfit(target_mesh,
     else:
         best_out = recursive_evaluate(best_program.tensor(dtype=prune_sketcher.dtype), prune_sketcher)
         hard_out = (best_out <= 0).bool()
-        hard_target = (decompose_target_sdf <= 0).bool()
+        hard_target = (target_sdf_prune <= 0).bool()
         best_iou = get_iou(hard_out, hard_target)
         Stats.record("success", True)
         Stats.record("best_obj", best_obj)

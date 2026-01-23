@@ -19,7 +19,7 @@ class AlgorithmConfig:
     MPS_MIN_IMPROVEMENT: float = 0.001
     PRUNE_RESOLUTION: int = 128
     DECOMPOSE_RESOLUTION: int = 256
-    OPT_RESOLUTION: int = 128
+    OPT_RESOLUTION: int = 48
     # SKETCHER:
     DATA_RESOLUTION: int = 256
 
@@ -50,21 +50,21 @@ class AlgorithmConfig:
 
     SCALE_FACTOR_START: float = 10.0
     SCALE_FACTOR_END: float = 15.0
-    N_ITERS: int = 500
-    SAT_PATIENCE: int = 150
+    N_ITERS: int = 400
+    SAT_PATIENCE: int = 100
     LOSS_BAND: float = 0.05
     MIN_IMPROVEMENT: float = 0.0001
     OPT_STOPPING_IOU: float = 0.99
-    MAX_ITER: int = 2500
+    MAX_ITER: int = 1000
     STOCHASTIC_PRECONDITION_INIT_VAL: float = 2 * np.sqrt(3) * 0.01
     STOCHASTIC_PRECONDITION_INIT_VAL_LOWER: float = 2 * np.sqrt(3) * 0.01
 
     # OTHER:
-    # TARGET_MODE: str = "bboxed"
-    TARGET_MODE: str = None
-    TARGET_MODE_DILATION: float = 0.1
+    TARGET_MODE: str = "dilated"
+    # TARGET_MODE: str = None
+    TARGET_MODE_DILATION: float = 0.15
     RENEW_PTS_ITER: int = 100
-    N_SURFACE_POINTS: int = 200_000
+    N_SURFACE_POINTS: int = 100_000
     LOG_FREQUENCY: int = 50
 
 
@@ -73,14 +73,14 @@ class AlgorithmConfig:
     SURFACE_ADJ_PERTURBATION_SCALE: float = 0.05 # 0.05
     STOCHASTIC_DROPOUT: bool = True
     LOSS_OCC_ALPHA: float = 1.0
-    LOSS_SURFACE_ADJ_OCC_ALPHA: float = 5.0
-    LOSS_SURFACE_SDF_ALPHA: float = 0.5
+    LOSS_SURFACE_ADJ_OCC_ALPHA: float = 2.0
+    LOSS_SURFACE_SDF_ALPHA: float = 0.2
     LOSS_PCOUNT_PHASIC: bool = False
-    LOSS_PRIMITIVE_COUNT_ALPHA: float = 5e-4
-    LOSS_PARAM_REGULARIZATION_ALPHA: float = 1e-5
+    LOSS_PRIMITIVE_COUNT_ALPHA: float = 2e-3
+    LOSS_PARAM_REGULARIZATION_ALPHA: float = 1e-8
     LOSS_PQUAL_PHASIC: bool = False
-    LOSS_OVERLAP_ALPHA: float = 8.0
-    LOSS_SHAPE_UNOVERLAP_ALPHA: float = 0.0
+    LOSS_OVERLAP_ALPHA: float = 2e-2
+    LOSS_SHAPE_UNOVERLAP_ALPHA: float = 2e-2
 
 
     SEMANTIC_LOSS: bool = False
@@ -99,7 +99,7 @@ class AlgorithmConfig:
     DO_PRUNE: bool = True
     OPT_HALF: bool = False
 
-    USE_CURVATURE_WEIGHTS: bool = False
+    USE_CURVATURE_WEIGHTS: bool = True
     CURVATURE_WEIGHTS_SCALE: float = 1.0
 
     ## LAST RUN CONFIGS:
@@ -176,7 +176,7 @@ def main_setting():
     AlgorithmConfig.TARGET_MODE: str = "dilated"
     # AlgorithmConfig.TARGET_MODE: str = None
     AlgorithmConfig.TARGET_MODE_DILATION: float = 0.15
-    AlgorithmConfig.OPT_RESOLUTION: int = 64
+    AlgorithmConfig.OPT_RESOLUTION: int = 48
 
 
     AlgorithmConfig.N_ITERS: int = 400

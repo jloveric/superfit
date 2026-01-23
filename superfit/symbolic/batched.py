@@ -1,13 +1,4 @@
 import geolipi.symbolic as gls
-import torch as th
-import torch.nn.functional as F
-from geolipi.torch_compute.sketcher import Sketcher
-from typing import Optional, List, Tuple
-import sympy as sp
-from geolipi.symbolic.registry import register_symbol
-
-
-# Packed versions - used for speeding up batched evals.
 
 class SuperFrustumPacked(gls.Primitive3D):
     @classmethod

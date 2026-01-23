@@ -30,6 +30,7 @@ def parse_args():
     parser.add_argument("--fastmode", action="store_true", required=False, default=False, help="Enable fastmode")
     parser.add_argument("--overwrite", action="store_true", required=False, default=False, help="Overwrite existing save files")
     parser.add_argument("--save_dir", type=str, default=SAVE_DIR_BASE, help="Save directory")
+    parser.add_argument("--aot_postfix", type=str, default="aott", help="AOT postfix")
     return parser.parse_args()
 
 
@@ -45,11 +46,14 @@ def shape_wise_resfit(input_mesh_file, save_dir, fastmode, ablation):
         pass
     elif ablation == 1:
         config_options.low_cost_mode()
-    elif ablation == 10:
+    elif ablation == 1:
         AlgConf.BIDIR = True
         # AlgConf.PRIM_TYPE = "VarAxisSF"
+    elif ablation == 2:
+        # AlgConf.BIDIR = True
+        AlgConf.PRIM_TYPE = "VarAxisSF"
     
-    AlgConf.AOT_ARTIFACT_FILE = os.path.join(AOT_ARTIFACT_DIR, f"aot_artifact_{ablation}.pt")    
+    AlgConf.AOT_ARTIFACT_FILE = os.path.join(AOT_ARTIFACT_DIR, f"aot_artifact_{args.aot_postfix}_{ablation}.pt")    
     
     if not os.path.exists(save_dir):
         os.makedirs(save_dir, exist_ok=True)
@@ -132,7 +136,11 @@ def main(args):
             
             # Process the mesh
             shape_wise_resfit(input_mesh_file, save_dir, args.fastmode, args.ablation)
+            logger.info("="*50)
+            logger.info("="*50)
             logger.info(f"Successfully processed index {idx}: {folder_name}\n")
+            logger.info("="*50)
+            logger.info("="*50)
         except Exception as e:
             logger.error(f"Error processing index {idx}: {str(e)}")
             failed_indices.append(idx)

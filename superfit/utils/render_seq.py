@@ -1,12 +1,8 @@
 import os
-import trimesh
 import numpy as np
 import distinctipy
-from PIL import Image
-import _pickle as cPickle
-import geolipi.symbolic as gls
-import sysl.symbolic as sls
 import time
+from PIL import Image
 import superfit.symbolic as sps
 from sysl.utils import recursive_sm_to_smg, recursive_gls_to_sysl
 from sysl.shader import evaluate_to_shader
@@ -45,7 +41,7 @@ def get_expr_at_iter(param_dict, handler, cur_iter):
     return expression
 
 def render_via_param_seq(in_param_dict, handler, frame_sampling_rate=10, 
-                         camera_movement_magnitude=0.1, camera_movement_frequency=1.0, 
+                         camera_movement_magnitude=0.3, camera_movement_frequency=1.0, 
                          version="v4"):
     param_dict = {x:y[::frame_sampling_rate] for x, y in in_param_dict.items()}
     some_param = param_dict[0]
@@ -75,6 +71,7 @@ def render_via_param_seq(in_param_dict, handler, frame_sampling_rate=10,
         shader_info = evaluate_to_shader(expr_smg, mode="multipass", post_process_shader=["part_outline_nobg"], settings=render_settings)
         # shader_info = evaluate_to_shader(expr_smg, mode="singlepass", settings=render_settings)
         image = render_multipass(shader_info, size=(256, 256))
+        image = Image.fromarray(image)
         renders.append(image)
         cur_time = time.time()
         if cur_iter % LOG_FREQ == 0:
@@ -112,13 +109,13 @@ def update_camera_settings(render_settings, cur_iter, total_iters,
     # Add slight vertical variation (cameraAngleX)
     # Smaller amplitude for vertical movement
     angle_x_offset = 2 * np.pi * progress * movement_frequency * 0.5
-    render_settings["variables"]["cameraAngleX"] = np.pi/4 + movement_magnitude * 0.3 * np.cos(angle_x_offset)
+    render_settings["variables"]["cameraAngleX"] = np.pi/6 + movement_magnitude * 0.3 * np.cos(angle_x_offset)
     
     # Slow zoom in and out effect (cameraDistance)
     # Zoom in and out over the course of optimization
-    distance_offset = 2 * np.pi * progress * movement_frequency * 0.3
+    distance_offset = 2 * np.pi * progress * movement_frequency
     base_distance = 3.0
-    distance_variation = movement_magnitude * 0.5 * (1 + np.sin(distance_offset))
+    distance_variation = movement_magnitude * 0.5 * np.sin(distance_offset)
     render_settings["variables"]["cameraDistance"] = base_distance + distance_variation
     
     return render_settings
@@ -135,10 +132,10 @@ def generate_renders(info_dict, save_dir, save_name,mode="all", save_seperately=
             renders = render_via_param_seq(param_dict, handler)
             all_renders.extend(renders)
             if save_seperately:
-                cur_save_name = f"{save_name}_{resfit_idx}.png"
+                cur_save_name = f"{save_name}_{resfit_idx}"
                 save_path = os.path.join(save_dir, cur_save_name)
-
                 save_renders(renders, save_path)
+
         if not save_seperately:
             save_path = os.path.join(save_dir, save_name)
             save_renders(all_renders, save_path)

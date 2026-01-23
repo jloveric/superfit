@@ -10,6 +10,7 @@ if [ "$#" -lt 3 ]; then
     echo "  end_ind: Ending index (exclusive)"
     echo "  num_gpus: Number of GPUs to use"
     echo "  ablation: Optional ablation number (default: 0)"
+    echo "  aot_postfix: Optional AOT postfix (default: aott)"
     exit 1
 fi
 
@@ -17,7 +18,7 @@ START_IND=$1
 END_IND=$2
 NUM_GPUS=$3
 ABLATION=${4:-0}
-
+AOT_POSTFIX=${5:-aott}
 # Log directory configuration
 LOG_DIR="/users/aganesh8/data/aganesh8/projects/project_neo/logs"
 mkdir -p "$LOG_DIR"
@@ -65,8 +66,8 @@ for ((gpu=0; gpu<NUM_GPUS; gpu++)); do
         # Activate conda environment
         conda activate superfit
         cd "$SCRIPT_DIR"
-        python scripts/generate_on_testset.py --start_ind $CURRENT_START --end_ind $CURRENT_END --ablation $ABLATION --fastmode --overwrite
-    ) > "${LOG_DIR}/proc_${gpu}.out" 2>&1 &
+        python scripts/generate_on_testset.py --start_ind $CURRENT_START --end_ind $CURRENT_END --ablation $ABLATION --fastmode --overwrite --aot_postfix $AOT_POSTFIX
+    ) > "${LOG_DIR}/proc_${gpu}_${AOT_POSTFIX}.out" 2>&1 &
     
     CURRENT_START=$CURRENT_END
 done

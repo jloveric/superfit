@@ -5,10 +5,8 @@ This module provides a registry pattern to manage different primitive types
 and their associated conversion, loss, and initialization functions.
 """
 from dataclasses import dataclass
-from typing import Callable, Dict, Type, Optional, Any, Tuple
+from typing import Callable, Dict, Type, Optional
 import torch as th
-import geolipi.symbolic as gls
-import superfit.symbolic as sps
 
 
 @dataclass
