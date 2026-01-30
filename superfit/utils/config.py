@@ -19,7 +19,7 @@ class AlgorithmConfig:
     MPS_MIN_IMPROVEMENT: float = 0.001
     PRUNE_RESOLUTION: int = 128
     DECOMPOSE_RESOLUTION: int = 256
-    OPT_RESOLUTION: int = 48
+    OPT_RESOLUTION: int = 64
     # SKETCHER:
     DATA_RESOLUTION: int = 256
 
@@ -37,8 +37,6 @@ class AlgorithmConfig:
     MIN_VOLUME_LIMIT_FOR_REINIT: float = 2e-5
     CLEANUP_V1: bool = True
     EARLY_STOP_ITER: int = 1
-
-
 
     # OPTIM
     OPTIMIZER: str = "ADAM"
@@ -71,17 +69,16 @@ class AlgorithmConfig:
     # LOSS Weights:
     SKIP_SURFACE: str = False
     SURFACE_ADJ_PERTURBATION_SCALE: float = 0.05 # 0.05
-    STOCHASTIC_DROPOUT: bool = True
     LOSS_OCC_ALPHA: float = 1.0
     LOSS_SURFACE_ADJ_OCC_ALPHA: float = 2.0
     LOSS_SURFACE_SDF_ALPHA: float = 0.2
-    LOSS_PCOUNT_PHASIC: bool = False
+    STOCHASTIC_DROPOUT: bool = True
     LOSS_PRIMITIVE_COUNT_ALPHA: float = 2e-3
-    LOSS_PARAM_REGULARIZATION_ALPHA: float = 1e-8
-    LOSS_PQUAL_PHASIC: bool = False
     LOSS_OVERLAP_ALPHA: float = 2e-2
     LOSS_SHAPE_UNOVERLAP_ALPHA: float = 2e-2
-
+    LOSS_PARAM_REGULARIZATION_ALPHA: float = 1e-8
+    LOSS_PCOUNT_PHASIC: bool = False
+    LOSS_PQUAL_PHASIC: bool = False
 
     SEMANTIC_LOSS: bool = False
     LOSS_SEMANTIC_PR_TO_PO_ALPHA: float = 10.0
@@ -136,7 +133,7 @@ class AlgorithmConfig:
     # RENDER CONFIGURATION
     RENDER_MODE: bool = True
     # Subsample if its an issue.
-    RENDER_ITER: int = 1
+    RENDER_ITER: int = 5
     
     # Ablations:
     LOWER_SP: bool = False
@@ -204,7 +201,7 @@ def main_setting():
         "min_eroded_part_size_ratio": 0.005,
         "min_part_size_ratio": 0.0005,
         "size_limit": 20,
-        "max_msd_iter": 7,
+        "max_msd_iter": 5,
     }
 
 def low_cost_mode():

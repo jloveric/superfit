@@ -97,7 +97,7 @@ def _params_from_variables_fast_sf(tensor_list):
     param = sf_packed_var_to_param(variable)
     param_list.append(param)
     variable = tensor_list[1]
-    mul, extra = 1.0, 1.0
+    mul, extra = 0.25, 0.25
     param = th.tanh(variable) * mul + extra
     param_list.append(param)
     variable = tensor_list[2]

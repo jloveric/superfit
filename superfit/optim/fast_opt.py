@@ -135,6 +135,10 @@ def run_optimization_loop_fast(init_opt_program, target_mesh, target, sketcher,
         # Get transformed parameters
         # transformed_params = params_from_variables(variable_list, tensor_list)
         transformed_params = compiled_ops.param_from_variables(variable_list)
+        # HACK
+        if not AlgConf.SMOOTHEN:
+            transformed_params[1] = transformed_params[1] * 0.0
+
         transformed_params.append(temperature)
         
         # Renew surface points if needed (including first iteration)

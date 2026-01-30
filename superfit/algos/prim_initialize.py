@@ -1,11 +1,9 @@
 # Code to initialize primitive from a given sdf volume. 
 import torch as th
-
-from superfit.utils.mesh_sdf import sdf_to_mesh
+import numpy as np
 import geolipi.symbolic as gls
 import superfit.symbolic as sps
 from superfit.utils.config import AlgorithmConfig as AlgConf
-from superfit.utils.logger import logger
 from superfit.symbolic.utils import inject_stochastic_prim
 
 ROUNDNESS_INIT_VAL = 0.4
@@ -13,8 +11,11 @@ ONION_INIT_VAL = 0.4
 SCALE_INIT_VAL = 0.7
 BULGE_INIT_VAL = 0.01
 SMOOTH_INIT_VAL = 0.01
+VARAXIS_INIT_VAL = 1.9
+
+MAX_INIT_PROB = 0.95
+
 MIN_VOLUME_LIMIT = 0.0001
-VARAXIS_INIT_VAL = 2.5
 
 def initialize_sp_prims(prim_params, sketcher):
     """
@@ -93,3 +94,10 @@ def simple_cleanup_volumetric(all_parts, all_indices, size_limit=50):
     # all_indices = all_indices[:size_limit]
     return all_parts[:size_limit], all_indices
     
+
+def get_delta(n_prims):
+    inverse_rate = n_prims
+    desired_prob = 0.9 ** (1 / inverse_rate)
+    desired_prob = min(desired_prob, MAX_INIT_PROB) # Should we?
+    delta = np.log(desired_prob/ (1 - desired_prob))
+    return delta

@@ -10,7 +10,7 @@ OPT_MIN_SCALE: float = 0.00001
 OPT_MAX_SCALE: float = 1.9999
 
 RANGE_DICT = {
-    gls.SmoothUnion: (OPT_MIN_SCALE, OPT_MAX_SCALE / 2.0),
+    gls.SmoothUnion: (OPT_MIN_SCALE, OPT_MAX_SCALE / 4.0),
     gls.Translate3D: (-OPT_MAX_TRANSLATE, OPT_MAX_TRANSLATE),
     "sp_size":      (0.01,   1.98),
     "sp_roundness": (OPT_MIN_SCALE,   OPT_MAX_SCALE / 2.0),

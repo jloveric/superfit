@@ -4,13 +4,14 @@ import trimesh
 import numpy as np
 import _pickle as cPickle
 from geolipi.torch_compute import Sketcher, recursive_evaluate
+from ..utils.io import to_cpu_recursive
 from ..utils.mesh_sdf import get_target_cubvh, renorm_target_sdf
 from ..symbolic.utils import gather_primitives
 from ..utils.mesh_sdf import get_masked
 from ..optim.entry import optimize_primitive_assembly
 from ..optim.measures import get_iou
 from ..utils.mesh_sdf import target_cleanup, CLEAN_UP_DELTA
-from .prim_initialize import get_init_prim_program, simple_cleanup_volumetric
+from .prim_initialize import get_init_prim_program, simple_cleanup_volumetric, get_delta
 from .estimate_init_params import generate_prim_initializations
 import superfit.symbolic as sps
 from .eval_tools import get_recon_measure, MeasurePack
@@ -21,12 +22,6 @@ from ..utils.logger import logger
 from .prune import main_pruning_pipeline
 from .eval_tools import eval_shape
 
-def get_delta(n_prims):
-    inverse_rate = n_prims
-    desired_prob = 0.9 ** (1 / inverse_rate)
-    desired_prob = min(desired_prob, 0.975) # Should we?
-    delta = np.log(desired_prob/ (1 - desired_prob))
-    return delta
     
 def resfit(target_mesh, 
     save_file=None,
@@ -171,11 +166,10 @@ def resfit(target_mesh,
             Stats.record("total_time", total_time)
             
             if save_file is not None:
-                iter_stats = Stats.get_dict()  # Get current scope (iter_{cur_iter})
                 if record_param:
                     raise ValueError("Record param not supported")
                 cur_save_file = save_file.replace(".pkl", f"_{cur_iter}.pkl")
-                cPickle.dump(iter_stats, open(cur_save_file, "wb"))
+                cPickle.dump(to_cpu_recursive(Stats.get_dict()), open(cur_save_file, "wb"))
                 logger.info(f"Saved to {cur_save_file}")
 
         if masked_target_sdf.min() > 0.0:

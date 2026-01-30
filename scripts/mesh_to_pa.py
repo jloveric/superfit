@@ -9,6 +9,7 @@ from superfit.utils.logger import logger
 from superfit.algos.resfit import resfit
 import superfit.utils.config as config_options
 from superfit.utils.mesh_preprocess import process_mesh_to_sdf
+from superfit.utils.io import to_cpu_recursive
 from superfit.utils.constants import AOT_ARTIFACT_DIR
 from superfit.utils.io import save_html
 from superfit.utils.config import AlgorithmConfig as AlgConf, initialize_seeds
@@ -63,7 +64,7 @@ def main_shape_wise(args):
     Stats.record("input_file", input_file)
     with Stats.timer("resfit_total"):
         best_program, running_program = resfit(mesh, save_file=save_file_temp)
-    cPickle.dump(Stats.get_dict(), open(save_file, "wb"))
+    cPickle.dump(to_cpu_recursive(Stats.get_dict()), open(save_file, "wb"))
     logger.info(f"Saved to {save_file}")
 
     # If save html

@@ -13,6 +13,7 @@ from superfit.utils.logger import logger
 from superfit.utils.constants import AOT_ARTIFACT_DIR, SAVE_DIR_BASE
 from superfit.utils.io import load_toy4k_mesh_paths, load_partobjaverse_mesh_paths
 import superfit.utils.config as config_options
+from superfit.utils.io import to_cpu_recursive
 
 
 th.set_float32_matmul_precision("medium")
@@ -45,13 +46,34 @@ def shape_wise_resfit(input_mesh_file, save_dir, fastmode, ablation):
     if ablation == 0:
         pass
     elif ablation == 1:
-        config_options.low_cost_mode()
-    elif ablation == 1:
         AlgConf.BIDIR = True
         # AlgConf.PRIM_TYPE = "VarAxisSF"
     elif ablation == 2:
         # AlgConf.BIDIR = True
         AlgConf.PRIM_TYPE = "VarAxisSF"
+    elif ablation == 3:
+        AlgConf.MPS_LEN_WEIGHT: float = -5e-3
+        AlgConf.LOSS_PRIMITIVE_COUNT_ALPHA: float = 5e-3
+        AlgConf.LOSS_OVERLAP_ALPHA: float = 5e-2
+        AlgConf.LOSS_SHAPE_UNOVERLAP_ALPHA: float = 5e-2
+    elif ablation == 4:
+        AlgConf.MPS_LEN_WEIGHT: float = -1e-2
+        AlgConf.LOSS_PRIMITIVE_COUNT_ALPHA: float = 1e-2
+        AlgConf.LOSS_OVERLAP_ALPHA: float = 1e-1
+        AlgConf.LOSS_SHAPE_UNOVERLAP_ALPHA: float = 1e-1
+    elif ablation == 5:
+        AlgConf.MPS_LEN_WEIGHT: float = -1e-3
+        AlgConf.LOSS_PRIMITIVE_COUNT_ALPHA: float = 1e-2
+        AlgConf.LOSS_OVERLAP_ALPHA: float = 1e-1
+        AlgConf.LOSS_SHAPE_UNOVERLAP_ALPHA: float = 1e-1
+    elif ablation == 6:
+        AlgConf.MPS_LEN_WEIGHT: float = -1e-3
+        AlgConf.LOSS_PRIMITIVE_COUNT_ALPHA: float = 1e-2
+        AlgConf.LOSS_OVERLAP_ALPHA: float = 1e-1
+        AlgConf.LOSS_SHAPE_UNOVERLAP_ALPHA: float = 1e-1
+        AlgConf.SMOOTHEN = False
+    elif ablation == 7:
+        AlgConf.LOWER_SP = True
     
     AlgConf.AOT_ARTIFACT_FILE = os.path.join(AOT_ARTIFACT_DIR, f"aot_artifact_{args.aot_postfix}_{ablation}.pt")    
     
@@ -64,7 +86,6 @@ def shape_wise_resfit(input_mesh_file, save_dir, fastmode, ablation):
 
     save_file = os.path.join(save_dir, "primitive_assembly.pkl")
     sketcher_3d = Sketcher(resolution=AlgConf.DATA_RESOLUTION, n_dims=3)
-    save_file_temp = os.path.join(save_dir, "resfit_prog.pkl")
     
     mesh, target_sdf = process_mesh_to_sdf(input_mesh_file, sketcher_3d)
 
@@ -79,8 +100,8 @@ def shape_wise_resfit(input_mesh_file, save_dir, fastmode, ablation):
     Stats.reset()
     Stats.record("input_mesh_file", input_mesh_file)
     with Stats.timer("resfit_total"):
-        resfit(mesh, save_file=save_file_temp)
-    cPickle.dump(Stats.get_dict(), open(save_file, "wb"))
+        resfit(mesh)
+    cPickle.dump(to_cpu_recursive(Stats.get_dict()), open(save_file, "wb"))
     logger.info(f"Saved to {save_file}")
 
 
