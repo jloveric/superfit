@@ -1,9 +1,5 @@
-import torch as th
+
 import numpy as np
-import geolipi.symbolic as gls
-from geolipi.torch_compute.sketcher import Sketcher
-from typing import Optional, List, Tuple
-from geolipi.symbolic.registry import register_symbol
 from sysl.shader.shader_module import register_shader_module
 from sysl.shader.shader_templates.common import CONSTANTS
 
@@ -13,8 +9,8 @@ CONSTANTS.update({
 
 SPBaseShader = register_shader_module("""
 @name SPBase
-@inputs pos, radius
-@outputs dist
+@inputs none
+@outputs none
 @dependencies 
 float HalfRoundedRectangle2D( in vec2 p, in vec2 b, in float r )
 {
@@ -46,8 +42,8 @@ float RoundedRectangle2D( in vec2 p, in vec2 size, in vec4 r )
 
 SPTaperedOnionShader = register_shader_module("""
 @name SPTaperedOnion
-@inputs pos, radius
-@outputs dist
+@inputs p, size, roundness, dilate_3d, scale, onion_ratio
+@outputs sd
 @dependencies SPBase
 @vardeps
 
@@ -156,12 +152,16 @@ float SPTaperedOnion(vec3 p, vec3 size, float roundness, float dilate_3d, float 
     return sd - dilate_3d;
 }""")
 
+CONSTANTS.update({
+    "BULGE_EPS": ("float", 1e-5),
+})
+
 SuperFrustumShader = register_shader_module("""
 @name SuperFrustum
 @inputs pos, radius
 @outputs dist
 @dependencies SPTaperedOnion
-@vardeps PI
+@vardeps PI, BULGE_EPS
 // --- constants ---
 
 // rotate 90° CCW
@@ -169,9 +169,10 @@ vec2 rot90(vec2 v){ return vec2(-v.y, v.x); }
 
 vec2 mapArcBulge(vec2 p, float z, float bulge)
 {
-    float eps = 1e-5;
     float half_z = 0.5 * z;
-    float theta_top = max(bulge * (PI * 0.5), eps);
+    p.x = p.x * sign(bulge);
+    float theta_top = max(abs(bulge) * (PI * 0.5), BULGE_EPS);
+    //float theta_top = bulge * (PI * 0.5);
 
     float center_pos = half_z / tan(theta_top);
     vec2  center = vec2(center_pos, 0.0);
@@ -210,14 +211,14 @@ vec2 mapArcBulge(vec2 p, float z, float bulge)
 
     vec2 new_point = mix(inside_point, above_point, mask_above);
     new_point = mix(new_point, below_point, mask_below);
+    new_point.x = new_point.x * sign(bulge);
     return new_point;
 }
 
-float SuperFrustum(vec3 p, vec3 size, float roundness, float dilate_3d, float scale, float bulge_ratio, float onion_ratio)
+float SuperFrustum(vec3 p, vec3 size, float roundness, float dilate_3d, float scale, float bulge, float onion_ratio)
 {   
     vec3 new_p = p;
-    float bulge = bulge_ratio;
-    if (bulge > 0.0)
+    if (bulge != 0.0)
     {
         vec2 new_xz = mapArcBulge(p.xz, size.z, bulge);
         new_p = vec3(new_xz.x, p.y, new_xz.y);
@@ -226,59 +227,293 @@ float SuperFrustum(vec3 p, vec3 size, float roundness, float dilate_3d, float sc
     return sd;
 }""")
 
-SuperFrustumYShader = register_shader_module("""
-@name SuperFrustumY
-@inputs pos, radius
-@outputs dist
-@dependencies SuperFrustum
-@vardeps
-
-float SuperFrustumY(vec3 p, vec3 size, float roundness, float dilate_3d, float scale, float bulge_ratio, float onion_ratio)
-{   
-    return SuperFrustum(p, size, roundness, dilate_3d, scale, bulge_ratio, onion_ratio);
-}""")
-
-SuperFrustumZShader = register_shader_module("""
-@name SuperFrustumZ
-@inputs pos, radius
-@outputs dist
-@dependencies SuperFrustum
-@vardeps
-
-float SuperFrustumZ(vec3 p, vec3 size, float roundness, float dilate_3d, float scale, float bulge_ratio, float onion_ratio)
-{   
-    p = p.yzx;
-    size = size.yzx;
-    return SuperFrustum(p, size, roundness, dilate_3d, scale, bulge_ratio, onion_ratio);
-}""")
-
-SuperFrustumXShader = register_shader_module("""
-@name SuperFrustumX
-@inputs pos, radius
-@outputs dist
-@dependencies SuperFrustum
-@vardeps
-
-float SuperFrustumX(vec3 p, vec3 size, float roundness, float dilate_3d, float scale, float bulge_ratio, float onion_ratio)
-{      
-    p = p.zxy;
-    size = size.zxy;
-    return SuperFrustum(p, size, roundness, dilate_3d, scale, bulge_ratio, onion_ratio);
-}""")
-
-
-SFSPShader = register_shader_module("""
-@name SFSP
+SolidSFShader = register_shader_module("""
+@name SolidSF
 @inputs pos, size, params, onion_ratio
 @outputs dist
 @dependencies SuperFrustum
-@vardeps 
+@vardeps
 
-float SFSP(vec3 p, vec3 size, vec4 params, float onion_ratio)
+float SolidSF(vec3 p, vec3 size, float roundness, float dilate_3d, float scale, float bulge, float onion_ratio, vec4 prob)
 {   
-    float roundness = params.x;
-    float dilate_3d = params.y;
-    float scale = params.z;
-    float bulge_ratio = params.w;
-    return SuperFrustum(p, size, roundness, dilate_3d, scale, bulge_ratio, onion_ratio);
+    float w_cube = prob.x;
+    float w_sphere = prob.y;
+    float w_cylinder = prob.z;
+    float w_cone = prob.w;
+
+    float size_xy = (size.x + size.y)/2.0;
+    vec3 size_cyl = vec3(size_xy, size_xy, size.z);
+    vec3 new_size = (w_cube) * size +  (w_cylinder + w_cone) * size_cyl;
+    vec3 new_roundness = (w_cylinder + w_cone);
+    float new_dilate_3d = w_sphere * dilate_3d;
+    float new_scale = (w_cube + w_sphere + w_cylinder);
+    float new_bulge = 0 * bulge;
+    float new_onion_ratio = (w_cube + w_cylinder + w_cone) * onion_ratio;
+    return SuperFrustum(p, new_size, new_roundness, new_dilate_3d, new_scale, new_bulge, new_onion_ratio);
 }""")
+
+CONSTANTS.update({
+    "ON_EPS": ("float", 1e-8),
+})
+
+
+SPProtoShader = register_shader_module("""
+@name SPProto
+@inputs pos, size, roundness, dilate_3d, onion_ratio, extrussion
+@outputs dist
+@dependencies SPBase
+@vardeps ON_EPS
+
+float SPProto(vec3 p, vec3 size, vec4 roundness, float dilate_3d, float onion_ratio, vec2 extrussion)
+{
+    // Match original effective mapping:
+    // 2D in (x,y), extrusion along z
+    size = size / 2.0;
+    vec2 q2 = p.xy;
+    float z = p.z;
+
+    // Common scales
+    float min_size = min(size.x, size.y);
+    float halfZ    = size.z;
+
+    vec4 r4 = roundness * min_size;
+    float exScale = min(min_size, halfZ);
+    vec2 ex = extrussion * exScale;
+
+    float onion_amount = onion_ratio * min_size;
+
+    // ---- 2D rounded box (per-corner radius) ----
+    // Corner pick matching original logic:
+    // rx = (x>0)? r.xy : r.zw; rc = (y>0)? rx.x : rx.y
+    vec2 rx = (q2.x > 0.0) ? r4.xy : r4.zw;
+    float rc = (q2.y > 0.0) ? rx.x : rx.y;
+
+    vec2 a = abs(q2) - size.xy + vec2(rc);
+    vec2 m = max(a, 0.0);
+    float d = min(max(a.x, a.y), 0.0) + length(m) - rc;
+
+    // Pre-extrude inset/outset transform
+    float th = 0.5 * max(ex.x, ex.y) + min_size - onion_amount;
+    d = abs(d + th) - th;
+
+    // Asymmetric extrusion rounding by z sign
+    float er = (z < 0.0) ? ex.x : ex.y;
+    float h  = halfZ - er;
+
+    // ---- Rounded extrusion ----
+    float qx = d + er;
+    float qy = abs(z) - h;
+
+    // Equivalent to:
+    // min(max(qx,qy),0) + length(max(vec2(qx,qy),0)) - er
+    // with fewer temporaries
+    float i = min(max(qx, qy), 0.0);
+    vec2 o = max(vec2(qx, qy), 0.0);
+    d = i + length(o) - er;
+
+    // Onion (optional)
+    if (onion_amount > ON_EPS) {
+        d = abs(d + onion_amount) - onion_amount;
+    }
+
+    // Final dilate
+    return d - dilate_3d;
+}""")
+
+
+CONSTANTS.update({
+    "MAX_INNER_BULGE": ("float", 0.9),
+    "SIZE_EPS": ("float", 1e-5),
+})
+
+SuperGeonShader = register_shader_module("""
+@name SuperGeon
+@inputs pos, size, roundness, dilate_3d, scale, bulge, onion_ratio, trapezoider
+@outputs dist
+@dependencies SPBase, dot2, SuperFrustum, Trapezoid2D, EulerRotate2D
+@vardeps MAX_INNER_BULGE, BULGE_EPS, SIZE_EPS    
+
+// ---------- Fast helpers ----------
+float saturate(float x) { return clamp(x, 0.0, 1.0); }
+
+// Squared distance point-segment, with precomputed inverse length^2 when available.
+float sd2PointSegment(vec2 p, vec2 a, vec2 e, float inv_e2)
+{
+    vec2 pa = p - a;
+    float t = saturate(dot(pa, e) * inv_e2);
+    vec2 d = pa - e * t;
+    return dot(d, d);
+}
+
+// ---------- 1) Faster right bulged edge ----------
+vec2 sdBulgedRightEdgeFast(vec2 p, vec2 A, vec2 B, float bulge)
+{
+    vec2 e = B - A;
+    float e2 = dot(e, e);
+    if (e2 < SIZE_EPS) {
+        vec2 d = p - A;
+        return vec2(length(d), 1.0);
+    }
+
+    float L = sqrt(e2);
+    float invL = 1.0 / L;
+
+    // tangent + inside-normal
+    vec2 t   = e * invL;
+    vec2 nIn = vec2(e.y, -e.x) * invL;
+
+    vec2 q = p - A;
+    float u = dot(q, nIn);
+    float v = dot(q, t);
+
+    // local (x,z), z centered
+    vec2 local = vec2(u, v - 0.5 * L);
+
+    // Straight edge fast path (very common during optimization near zero bulge)
+    if (abs(bulge) < BULGE_EPS) {
+        float zc = clamp(local.y, -0.5 * L, 0.5 * L);
+        vec2 dvec = vec2(local.x, local.y - zc);
+        return vec2(length(dvec), local.x);
+    }
+
+    // Curved map
+    vec2 m = mapArcBulge(local, L, bulge);
+
+    // Distance to x=0, clamped in z
+    float zc = clamp(m.y, -0.5 * L, 0.5 * L);
+    vec2 dvec = vec2(m.x, m.y - zc);
+    float d = length(dvec);
+
+    // Keep your sign proxy convention
+    float c_like = -m.x;
+    return vec2(d, c_like);
+}
+
+// ---------- 2) Faster tapered trapezoid onion+bulge ----------
+float sdTaperTrapezoidOnionBulgeFast(
+    vec2 p,
+    float inner,
+    float h,
+    float x3,
+    float onion_ratio,
+    float bulge // [-1,1]
+){
+    // Geometry
+    float oneMinusOnion = 1.0 - onion_ratio;
+    float xL  = -inner * oneMinusOnion;
+    float xTL = -inner + (x3 + inner) * onion_ratio;
+    float yB  = -h, yT = h;
+
+    vec2 Lb = vec2(xL,  yB);
+    vec2 Lt = vec2(xTL, yT);
+    vec2 eL = Lt - Lb;
+
+    float e2L = dot(eL, eL);
+    float inv_e2L = 1.0 / max(e2L, 1e-12);
+
+    // ---- squared distances to boundaries (keep squared until final sqrt)
+
+    // Left segment
+    float d2_left = sd2PointSegment(p, Lb, eL, inv_e2L);
+
+    // Bottom segment [xL, 0] at yB
+    float xb = clamp(p.x, xL, 0.0);
+    float dyb = p.y - yB;
+    float d2_bottom = (p.x - xb) * (p.x - xb) + dyb * dyb;
+
+    // Top segment [xTL, x3] at yT
+    float xt = clamp(p.x, xTL, x3);
+    float dyt = p.y - yT;
+    float d2_top = (p.x - xt) * (p.x - xt) + dyt * dyt;
+
+    // Right bulged edge
+    vec2 rightRes  = sdBulgedRightEdgeFast(p, vec2(0.0, yB), vec2(x3, yT), bulge);
+    float d2_right = rightRes.x * rightRes.x;
+
+    float d2 = min(min(d2_left, d2_bottom), min(d2_top, d2_right));
+
+    // ---- inside test (same convention)
+    // Left half-plane sign
+    float cL = eL.y * (p.x - Lb.x) - eL.x * (p.y - Lb.y);
+    cL = -cL;
+
+    float cB = yB - p.y;
+    float cT = p.y - yT;
+    float cS = rightRes.y;
+
+    // branchless-ish inside mask
+    float m = max(max(cL, cB), max(cT, cS));
+    float d = sqrt(d2);
+    return (m <= 0.0) ? -d : d;
+}
+
+// ---------- 3) Faster InnerSuperGeon ----------
+float InnerSuperGeonFast(
+    vec3 p, vec3 size,
+    float roundness,
+    float onion_ratio,
+    float trapezoider,
+    float taper,
+    float taper_bulge,
+    float dilate_3d
+){
+    // Half extents once
+    size *= 0.5;
+
+    // Swap without branch (mix) based on trapezoider sign
+    float sw = step(0.0, trapezoider); // 1 when >=0 => swap
+    vec2 pxyA = p.xy;
+    vec2 pxyB = p.yx;
+    p.xy = mix(pxyA, pxyB, sw);
+
+    vec2 sxyA = size.xy;
+    vec2 sxyB = size.yx;
+    size.xy = mix(sxyA, sxyB, sw);
+
+    float min_size = min(size.x, size.y);
+    float trap_amount = 1.0 - abs(trapezoider);
+
+    float r = roundness * min_size;
+    vec2 sxy_r = size.xy - vec2(r);
+
+    // 2D trapezoid sdf then corner roundness offset
+    float sdf2d = Trapezoid2D(p.xy, sxy_r.x, sxy_r.x * trap_amount, sxy_r.y) - r;
+
+    vec2 pos_2d = vec2(sdf2d, p.z);
+
+    // Params for bulged onion trapezoid in sdf-space
+    float half_height = size.z;
+    float x3 = -(1.0 - taper) * min_size;
+
+    // Bulge scaling
+    float inv_h = 1.0 / max(half_height, 1e-8);
+    float max_bulge = min_size * (1.0 - onion_ratio) * inv_h * min(1.0, taper);
+    max_bulge = min(MAX_INNER_BULGE, max_bulge);
+    float min_bulge = 0.5;
+
+    // preserve your piecewise choice
+    float bulge_scale = (taper_bulge > 0.0) ? max_bulge : min_bulge;
+    float bulge = clamp(taper_bulge, -1.0, 1.0) * bulge_scale;
+
+    float sd = sdTaperTrapezoidOnionBulgeFast(
+        pos_2d, min_size, half_height, x3, onion_ratio, bulge
+    );
+
+    return sd - dilate_3d;
+}
+float SuperGeon(vec3 p, vec3 size, float roundness, float dilate_3d, float taper, float bulge, float onion_ratio, float trapeze, float taper_bulge, float rot2d)
+{   
+    vec3 new_p = p;
+    if (bulge != 0.0)
+    {
+        vec2 new_xz = mapArcBulge(p.xz, size.z, bulge);
+        new_p = vec3(new_xz.x, p.y, new_xz.y);
+    }else{
+        new_p.x = -new_p.x;
+    }
+    new_p.xy = EulerRotate2D(new_p.xy, rot2d);
+
+    float sd = InnerSuperGeonFast(new_p, size, roundness, onion_ratio, trapeze, taper, taper_bulge, dilate_3d);
+    return sd;
+}""")
+

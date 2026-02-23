@@ -119,9 +119,6 @@ def eval_shape(pred_program, measure_pack, semantic_loss_holder: SemanticLossHol
 
         # CD 
         cd = th.cdist(pred_points, surface_samples_cd, p=2) ** 2
-
-
-
         cd_1 = th.min(cd, dim=1)[0]
         cd_2 = th.min(cd, dim=0)[0] 
         cd_1_mean = th.mean(cd_1)

@@ -4,26 +4,50 @@ from .primitives import map_arc_bulge
 import superfit.symbolic as sps
 from geolipi.torch_compute.maps import PRIMITIVE_MAP
 from geolipi.torch_compute.constants import EPSILON
-from geolipi.torch_compute.transforms import axis_angle_to_rotation_matrix
+# from geolipi.torch_compute.transforms import axis_angle_to_rotation_matrix
+from .compile_friendly import axis_angle_to_rotation_matrix, _sdf_smooth_union_pair
 from superfit.symbolic.utils import sample_gumbel
 
+def smooth_union_k_way(output, su_vals):
+    K = output.shape[0]
+    out = output[0]
+    for i in range(1, K):
+        k_reshaped = su_vals[i-1].unsqueeze(-1)
+        out = _sdf_smooth_union_pair(out, output[i], k_reshaped)
+    return out
 
-def _sdf_smooth_union_pair(sdf_a: th.Tensor, sdf_b: th.Tensor, k: th.Tensor) -> th.Tensor:
-    """
-    Smooth union of two SDFs (exactly your formula).
-    sdf_a, sdf_b: same shape (broadcasting okay).
-    k: scalar/tensor broadcastable to sdf_a/sdf_b.
+def common_transform_coords(coords, translate, rotate):
+    R = axis_angle_to_rotation_matrix(rotate)                  # (B,3,3)
+    p_local = coords - translate.unsqueeze(1)                  # (B,M,3)
+    transformed_coords = th.matmul(p_local, R.transpose(-1, -2))  # (B,M,3)
+    return transformed_coords
 
-    k *= 4.0;
-    float h = max( k-abs(a-b), 0.0 )/k;
-    return min(a,b) - h*h*k*(1.0/4.0);
-    """
-    # k *= 4.0
-    # h = th.clamp(k - th.abs(sdf_a - sdf_b), min=0.0) / k
-    # sdf = th.minimum(sdf_a, sdf_b) - h * h * k / 4.0
-    h = th.clamp(0.5 + 0.5 * (sdf_b - sdf_a) / (k + EPSILON), min=0.0, max=1.0)
-    sdf = th.lerp(sdf_b, sdf_a, h) - k * h * (1.0 - h)
-    return sdf
+def unpacked_params_sf(params):
+
+    translate   = params[...,  :3]      # (B,3)
+    size        = params[...,  3:6]     # (B,3)
+    roundness   = params[...,  6:7]    # (B,1)
+    dilate_3d   = params[..., 7:8]    # (B,1)
+    scale       = params[..., 8:9]    # (B,1)
+    bulge_ratio = params[..., 9:10]    # (B,1)
+    onion_ratio = params[..., 10:11]    # (B,1)
+    rotate      = params[...,  11:14]     # (B,3) axis-angle
+
+    return translate, size, roundness, dilate_3d, scale, bulge_ratio, onion_ratio, rotate
+
+def unpacked_params_varsf(params):
+
+    translate   = params[...,  :3]      # (B,3)
+    size        = params[...,  3:6]     # (B,3)
+    roundness   = params[...,  6:7]    # (B,1)
+    dilate_3d   = params[..., 7:8]    # (B,1)
+    scale       = params[..., 8:9]    # (B,1)
+    bulge_ratio = params[..., 9:10]    # (B,1)
+    onion_ratio = params[..., 10:11]    # (B,1)
+    logits      = params[..., 11:14]    # (B,3)
+    rotate      = params[...,  14:17]     # (B,3) axis-angle
+
+    return translate, size, roundness, dilate_3d, scale, bulge_ratio, onion_ratio, logits, rotate
 
 def sd_taper_trapezoid_onion_exact_batched(pos_2d: th.Tensor,
                                      inner: th.Tensor,         # (B,) or (B,1)
@@ -81,28 +105,8 @@ def sd_taper_trapezoid_onion_exact_batched(pos_2d: th.Tensor,
     return th.where(inside, -dmin, dmin)  # (B,N)
 
 
-# @th.jit.script
-def batched_sf_packed_eval(coords, params):
-    """
-    coords: (B, M, 3)
-    params: (B, 13+) -> [tx,ty,tz, rx,ry,rz, sx,sy,sz, round, dilate, scale, bulge]
-    returns: (B, M)
-    """
-    # -------- unpack once, keep shapes broadcast-friendly
 
-    translate   = params[...,  :3]      # (B,3)
-    rotate      = params[...,  3:6]     # (B,3) axis-angle
-    size        = params[...,  6:9]     # (B,3)
-    roundness   = params[...,  9:10]    # (B,1)
-    dilate_3d   = params[..., 10:11]    # (B,1)
-    scale       = params[..., 11:12]    # (B,1)
-    bulge_ratio = params[..., 12:13]    # (B,1)
-    onion_ratio = params[..., 13:14]    # (B,1)
-    # -------- rigid transform: R @ (x - t)   (avoid 4x4, bmm, einsum, w-divide)
-    # Your original new_transform = R * T with T translating by -t yields R(x - t).
-    R = axis_angle_to_rotation_matrix(rotate)                  # (B,3,3)
-    p_local = coords - translate.unsqueeze(1)                  # (B,M,3)
-    transformed_coords = th.matmul(p_local, R.transpose(-1, -2))  # (B,M,3)
+def batched_sf_packed_eval_part_2(transformed_coords, size, roundness, dilate_3d, scale, bulge_ratio, onion_ratio):
 
     # -------- xz bulge map (avoid extra stacks until needed)
     # Use your faster map_arc_bulge that returns (...,2)
@@ -147,14 +151,23 @@ def batched_sf_packed_eval(coords, params):
 
     return sd - dilate_3d  # (B,1) broadcasts over (B,M)
 
-
+# @th.jit.script
+def batched_sf_packed_eval(coords, params):
+    """
+    coords: (B, M, 3)
+    params: (B, 13+) -> [tx,ty,tz, rx,ry,rz, sx,sy,sz, round, dilate, scale, bulge]
+    returns: (B, M)
+    """
+    # -------- unpack once, keep shapes broadcast-friendly
+    unpacked_params = unpacked_params_sf(params)
+    translate, size, roundness, dilate_3d, scale, bulge_ratio, onion_ratio, rotate = unpacked_params
+    transformed_coords = common_transform_coords(coords, translate, rotate)
+    sdf_eval = batched_sf_packed_eval_part_2(transformed_coords, size, roundness, dilate_3d, scale, bulge_ratio, onion_ratio)
+    return sdf_eval
+    
 def batched_sf_packed_su_eval(coords, params, su_vals):
     output = batched_sf_packed_eval(coords, params)
-    K = output.shape[0]
-    out = output[0]
-    for i in range(1, K):
-        k_reshaped = su_vals[i-1].unsqueeze(-1)
-        out = _sdf_smooth_union_pair(out, output[i], k_reshaped)
+    out = smooth_union_k_way(output, su_vals)
     return (output, out)
 
 def batched_sf_packed_stochastic_eval(coords, params, logits, temperature):
@@ -173,25 +186,13 @@ def batched_sf_packed_stochastic_eval(coords, params, logits, temperature):
 
 def batched_sf_packed_stochastic_su_eval(coords, params, su_vals, logits, temperature):
     output = batched_sf_packed_stochastic_eval(coords, params, logits, temperature)
-
-    K = output.shape[0]
-
-    out = output[0]
-    for i in range(1, K):
-        k_reshaped = su_vals[i-1].unsqueeze(-1)
-        out = _sdf_smooth_union_pair(out, output[i], k_reshaped)
+    out = smooth_union_k_way(output, su_vals)
     return (output, out)
 
 
 def batched_solid_sf_packed_eval(coords, params, temperature):
-    translate = params[..., :3]
-    rotate = params[..., 3:6]
-    size = params[..., 6:9]
-    roundness = params[..., 9:10]
-    dilate_3d = params[..., 10:11]
-    scale = params[..., 11:12]
-    bulge_ratio = params[..., 12:13]
-    onion_ratio = params[..., 13:14]
+    unpacked_params = unpacked_params_sf(params)
+    translate, size, roundness, dilate_3d, scale, bulge_ratio, onion_ratio, rotate = unpacked_params
     logits = params[..., 14:18]
 
     
@@ -216,11 +217,7 @@ def batched_solid_sf_packed_eval(coords, params, temperature):
 
 def batched_solid_sf_packed_su_eval(coords, params, su_vals, temperature):
     output = batched_solid_sf_packed_eval(coords, params, temperature)
-    K = output.shape[0]
-    out = output[0]
-    for i in range(1, K):
-        k_reshaped = su_vals[i-1].unsqueeze(-1)
-        out = _sdf_smooth_union_pair(out, output[i], k_reshaped)
+    out = smooth_union_k_way(output, su_vals)
     return (output, out)
 
 def batched_solid_sf_packed_stochastic_eval(coords, params, logits, temperature):
@@ -235,14 +232,52 @@ def batched_solid_sf_packed_stochastic_eval(coords, params, logits, temperature)
 
 def batched_solid_sf_packed_stochastic_su_eval(coords, params, su_vals, logits, temperature):
     output = batched_solid_sf_packed_stochastic_eval(coords, params, logits, temperature)
-    K = output.shape[0]
-    out = output[0]
-    for i in range(1, K):
-        k_reshaped = su_vals[i-1].unsqueeze(-1) * (temperature ** 2)
-        out = _sdf_smooth_union_pair(out, output[i], k_reshaped)
+    out = smooth_union_k_way(output, su_vals)
     return (output, out)
 # Other option - just update the tables used in the origin code. 
 
+
+def batched_varaxis_sf_packed_eval_st(coords: th.Tensor,
+                                              params: th.Tensor,
+                                              temperature: float):
+    """
+    coords: (B, M, 3)
+    params: (B, K) where last 3 entries are logits for {xyz, yzx, zxy}
+            and size is at params[..., 6:9] in the base part.
+    temperature: float
+
+    Forward: hard per-batch axis permutation (xyz / yzx / zxy)
+    Backward: straight-through (grad flows as if soft mixture)
+    """
+    
+    unpacked_params = unpacked_params_sf(params)
+    translate, size, roundness, dilate_3d, scale, bulge_ratio, onion_ratio, rotate = unpacked_params
+    logits = params[..., 14:17]
+
+    # ----- straight-through gumbel-softmax: one-hot in forward, soft in backward
+    transformed_coords = common_transform_coords(coords, translate, rotate)
+
+    # ----- permutation matrices A such that: new = old @ A  (matches gather old[..., perm])
+    # 0: xyz -> [0,1,2]
+    # 1: yzx -> [1,2,0]
+    # 2: zxy -> [2,0,1]
+    # Each A has A[perm[j], j] = 1
+    y = F.gumbel_softmax(logits, tau=temperature, hard=True, dim=-1)  # (B,3)
+    P_stack = coords.new_tensor([
+        [[1,0,0],[0,1,0],[0,0,1]],  # xyz  perm [0,1,2]
+        [[0,0,1],[1,0,0],[0,1,0]],  # yzx  perm [1,2,0]  (new=[y,z,x])
+        [[0,1,0],[0,0,1],[1,0,0]],  # zxy  perm [2,0,1]  (new=[z,x,y])
+    ])  # (3,3,3)
+
+    # Build per-batch permutation matrix (B,3,3). Forward it's exactly one of the above.
+    P = th.einsum('bk,kij->bij', y, P_stack)  # (B,3,3)
+
+    # ----- apply permutation to coords and size (single matmul each)
+    coords_p = th.bmm(transformed_coords, P)  # (B,M,3)
+
+    size_p = th.bmm(size.unsqueeze(1), P).squeeze(1)  # (B,3)
+
+    return batched_sf_packed_eval_part_2(coords_p, size_p, roundness, dilate_3d, scale, bulge_ratio, onion_ratio)
 
 def batched_varaxis_sf_packed_eval(coords: th.Tensor,
                                               params: th.Tensor,
@@ -256,36 +291,36 @@ def batched_varaxis_sf_packed_eval(coords: th.Tensor,
     Forward: hard per-batch axis permutation (xyz / yzx / zxy)
     Backward: straight-through (grad flows as if soft mixture)
     """
-    logits = params[..., -3:]      # (B,3)
-    base   = params[..., :-3]      # (B,K-3)
+    unpacked_params = unpacked_params_varsf(params)
+    translate, size, roundness, dilate_3d, scale, bulge_ratio, onion_ratio, logits, rotate = unpacked_params
+    
+    
+    transformed_coords = common_transform_coords(coords, translate, rotate)
+    sdf_y = batched_sf_packed_eval_part_2(transformed_coords, size, roundness, dilate_3d, scale, bulge_ratio, onion_ratio)
+    new_coords = transformed_coords.clone()[:, :, [1, 2, 0]]
+    new_size = size.clone()[:, [1, 2, 0]]
+    sdf_z = batched_sf_packed_eval_part_2(new_coords, new_size, roundness, dilate_3d, scale, bulge_ratio, onion_ratio)
+    new_coords = transformed_coords.clone()[:, :, [2, 0, 1]]
+    new_size = size.clone()[:, [2, 0, 1]]
+    sdf_x = batched_sf_packed_eval_part_2(new_coords, new_size, roundness, dilate_3d, scale, bulge_ratio, onion_ratio)
+    # IDEA - as the SDF field becomes more disparate across the axes, we should use a sharper distribution..
+    g  = sample_gumbel(logits.shape, device=logits.device, dtype=logits.dtype)
+    # div_t = deviation_based_temperature(roundness, dilate_3d, scale, bulge_ratio, onion_ratio)
+    # w  = th.softmax((logits/div_t + g) / temperature, dim=-1)  # (..., 2)
+    w  = th.softmax((logits + g) / temperature, dim=-1)  # (..., 2)
+    wy = w[:, 0:1]
+    wz = w[:, 1:2]
+    wx = w[:, 2:3]
+    out = wy * sdf_y + wz * sdf_z + wx * sdf_x
+    return out
 
-    # ----- straight-through gumbel-softmax: one-hot in forward, soft in backward
-    y = F.gumbel_softmax(logits, tau=temperature, hard=True, dim=-1)  # (B,3)
-
-    # ----- permutation matrices A such that: new = old @ A  (matches gather old[..., perm])
-    # 0: xyz -> [0,1,2]
-    # 1: yzx -> [1,2,0]
-    # 2: zxy -> [2,0,1]
-    # Each A has A[perm[j], j] = 1
-    P_stack = coords.new_tensor([
-        [[1,0,0],[0,1,0],[0,0,1]],  # xyz
-        [[0,0,1],[1,0,0],[0,1,0]],  # yzx
-        [[0,1,0],[0,0,1],[1,0,0]],  # zxy
-    ])  # (3,3,3), float dtype for matmul
-
-    # Build per-batch permutation matrix (B,3,3). Forward it's exactly one of the above.
-    P = th.einsum('bk,kij->bij', y, P_stack)  # (B,3,3)
-
-    # ----- apply permutation to coords and size (single matmul each)
-    coords_p = th.matmul(coords, P)  # (B,M,3)
-
-    size = base[..., 6:9]  # (B,3)
-    size_p = th.matmul(size.unsqueeze(1), P).squeeze(1)  # (B,3)
-
-    # ----- rebuild params (avoid base.clone())
-    new_base = th.cat([base[..., :6], size_p, base[..., 9:]], dim=-1)
-
-    return batched_sf_packed_eval(coords_p, new_base)
+def deviation_based_temperature(roundness, dilate_3d, scale, bulge_ratio, onion_ratio):
+    scale_deviation = th.abs(scale.clone().detach() - 1)
+    # Bulge deviation has a more drastic effect on the SDF.
+    bulge_deviation = th.abs(bulge_ratio.clone().detach()) * 2.0
+    deviation = scale_deviation + bulge_deviation
+    div_t = 0.05 + (1 - th.tanh(10 * deviation - 2.0)) * 0.475
+    return div_t
 
 def batched_varaxis_sf_packed_stochastic_eval(coords, params, logits, temperature):
     # B, N
@@ -299,21 +334,13 @@ def batched_varaxis_sf_packed_stochastic_eval(coords, params, logits, temperatur
 
 def batched_varaxis_sf_packed_su_eval(coords, params, su_vals, temperature):
     output = batched_varaxis_sf_packed_eval(coords, params, temperature)
-    K = output.shape[0]
-    out = output[0]
-    for i in range(1, K):
-        k_reshaped = su_vals[i-1].unsqueeze(-1)
-        out = _sdf_smooth_union_pair(out, output[i], k_reshaped)
+    out = smooth_union_k_way(output, su_vals)
     return (output, out)
 
 
 def batched_varaxis_sf_packed_stochastic_su_eval(coords, params, su_vals, logits, temperature):
     output = batched_varaxis_sf_packed_stochastic_eval(coords, params, logits, temperature)
-    K = output.shape[0]
-    out = output[0]
-    for i in range(1, K):
-        k_reshaped = su_vals[i-1].unsqueeze(-1) * (temperature ** 2)
-        out = _sdf_smooth_union_pair(out, output[i], k_reshaped)
+    out = smooth_union_k_way(output, su_vals)
     return (output, out)
 
 function_map = {
@@ -331,7 +358,6 @@ function_map = {
     sps.VarAxisSFPackedBatchedStochastic: batched_varaxis_sf_packed_stochastic_eval,
     sps.VarAxisSFPackedBatchedSU: batched_varaxis_sf_packed_su_eval,
     sps.VarAxisSFPackedBatchedStochasticSU: batched_varaxis_sf_packed_stochastic_su_eval,
-
 }
 PRIMITIVE_MAP.update(function_map)
 

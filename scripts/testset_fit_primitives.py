@@ -6,7 +6,7 @@ import numpy as np
 import _pickle as cPickle
 from geolipi.torch_compute import recursive_evaluate, Sketcher
 from superfit.algos.resfit import resfit
-from superfit.utils.mesh_preprocess import process_mesh_to_sdf
+from superfit.utils.mesh_preprocess import process_mesh_to_sdf, cd_based_process_mesh_to_sdf
 from superfit.utils.config import AlgorithmConfig as AlgConf
 from superfit.utils.stats import Stats
 from superfit.utils.logger import logger
@@ -19,7 +19,7 @@ from superfit.utils.io import to_cpu_recursive
 th.set_float32_matmul_precision("medium")
 th.backends.cudnn.benchmark = True
 th._dynamo.config.cache_size_limit = 32
-
+th.autograd.set_detect_anomaly(True)
 
 def parse_args():
     """Parse command line arguments."""
@@ -38,42 +38,7 @@ def parse_args():
 def shape_wise_resfit(input_mesh_file, save_dir, fastmode, ablation):
     """Process a single mesh file with resfit algorithm."""
     config_options.main_setting()
-
-    if not fastmode:
-        AlgConf.FastMode = False
-        AlgConf.TorchCompile = False
-
-    if ablation == 0:
-        pass
-    elif ablation == 1:
-        AlgConf.BIDIR = True
-        # AlgConf.PRIM_TYPE = "VarAxisSF"
-    elif ablation == 2:
-        # AlgConf.BIDIR = True
-        AlgConf.PRIM_TYPE = "VarAxisSF"
-    elif ablation == 3:
-        AlgConf.MPS_LEN_WEIGHT: float = -5e-3
-        AlgConf.LOSS_PRIMITIVE_COUNT_ALPHA: float = 5e-3
-        AlgConf.LOSS_OVERLAP_ALPHA: float = 5e-2
-        AlgConf.LOSS_SHAPE_UNOVERLAP_ALPHA: float = 5e-2
-    elif ablation == 4:
-        AlgConf.MPS_LEN_WEIGHT: float = -1e-2
-        AlgConf.LOSS_PRIMITIVE_COUNT_ALPHA: float = 1e-2
-        AlgConf.LOSS_OVERLAP_ALPHA: float = 1e-1
-        AlgConf.LOSS_SHAPE_UNOVERLAP_ALPHA: float = 1e-1
-    elif ablation == 5:
-        AlgConf.MPS_LEN_WEIGHT: float = -1e-3
-        AlgConf.LOSS_PRIMITIVE_COUNT_ALPHA: float = 1e-2
-        AlgConf.LOSS_OVERLAP_ALPHA: float = 1e-1
-        AlgConf.LOSS_SHAPE_UNOVERLAP_ALPHA: float = 1e-1
-    elif ablation == 6:
-        AlgConf.MPS_LEN_WEIGHT: float = -1e-3
-        AlgConf.LOSS_PRIMITIVE_COUNT_ALPHA: float = 1e-2
-        AlgConf.LOSS_OVERLAP_ALPHA: float = 1e-1
-        AlgConf.LOSS_SHAPE_UNOVERLAP_ALPHA: float = 1e-1
-        AlgConf.SMOOTHEN = False
-    elif ablation == 7:
-        AlgConf.LOWER_SP = True
+    config_options.set_config_ablation(ablation, fastmode=fastmode)
     
     AlgConf.AOT_ARTIFACT_FILE = os.path.join(AOT_ARTIFACT_DIR, f"aot_artifact_{args.aot_postfix}_{ablation}.pt")    
     
@@ -87,18 +52,14 @@ def shape_wise_resfit(input_mesh_file, save_dir, fastmode, ablation):
     save_file = os.path.join(save_dir, "primitive_assembly.pkl")
     sketcher_3d = Sketcher(resolution=AlgConf.DATA_RESOLUTION, n_dims=3)
     
-    mesh, target_sdf = process_mesh_to_sdf(input_mesh_file, sketcher_3d)
+    mesh, target_sdf, cd_avg = cd_based_process_mesh_to_sdf(input_mesh_file, sketcher_3d)
 
     if not mesh.is_watertight:
         raise ValueError(f"------- Non Watertight Mesh -------")
-    min_sdf = target_sdf.min().item()
-    max_sdf = target_sdf.max().item()
-    if min_sdf <-1.0 or max_sdf > 1.0:
-        logger.error(f"Invalid SDF range: min={min_sdf:.6f}, max={max_sdf:.6f}")
-        raise ValueError(f"----------- INVALID SDF RANGE -----------")
-    
+    logger.info(f"CD_AVG: {cd_avg}")
     Stats.reset()
     Stats.record("input_mesh_file", input_mesh_file)
+    # inner_save_file = os.path.join(save_dir, "stepwise.pkl")
     with Stats.timer("resfit_total"):
         resfit(mesh)
     cPickle.dump(to_cpu_recursive(Stats.get_dict()), open(save_file, "wb"))
@@ -117,7 +78,7 @@ def main(args):
     
     failed_indices = []
     indices = np.arange(args.start_ind, args.end_ind)
-    
+    all_cds = []
     # Process each index in the list
     for idx in indices:
         if idx >= len(mesh_paths):
@@ -125,6 +86,7 @@ def main(args):
             continue
         
         try:
+        # if True:
             input_mesh_file = mesh_paths[idx]
             
             # Extract folder name from path for save directory
@@ -137,7 +99,7 @@ def main(args):
                 folder_name = os.path.splitext(os.path.basename(input_mesh_file))[0]
             
             # Set save directory
-            save_dir = os.path.join(args.save_dir, args.dataset, f"ablation_{args.ablation}", folder_name)
+            save_dir = os.path.join(args.save_dir, args.dataset, f"ablation_{args.ablation}_v4", folder_name)
             
             # Check if save file exists and skip if overwrite is False
             save_file = os.path.join(save_dir, "primitive_assembly.pkl")
@@ -166,10 +128,11 @@ def main(args):
             logger.error(f"Error processing index {idx}: {str(e)}")
             failed_indices.append(idx)
             traceback.print_exc()
+            cPickle.dump(to_cpu_recursive(Stats.get_dict()), open(save_file.replace(".pkl", "_error.pkl"), "wb"))
+            logger.info(f"Saved error stats to {save_file.replace('.pkl', '_error.pkl')}")
             continue
     
     logger.info(f"\nProcessing complete. Failed indices: {failed_indices}")
-
 
 if __name__ == "__main__":
     args = parse_args()

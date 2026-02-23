@@ -1,8 +1,48 @@
 import torch as th
 import geolipi.symbolic as gls
 import superfit.symbolic as sps
+from ...utils.config import AlgorithmConfig as AlgConf
 from ..primitive_registry import PrimitiveHandler, register_handler
-from .utils import (process_param_to_var, process_var_to_param, su_param_to_var, su_var_to_param)
+from ...torch_compute.batched_others import (
+    batched_cuboid_packed_stochastic_eval,
+    batched_sq_packed_stochastic_eval,
+    batched_varaxis_sq_packed_stochastic_eval,
+)
+from ..losses import get_param_loss_sf
+from .utils import (
+    build_transform_constants,
+    make_packed_param_to_var,
+    make_packed_var_to_param,
+    make_param_to_var_dispatcher,
+    make_var_to_param_dispatcher,
+    make_param_from_variables_fast,
+)
+
+# SQ: [0:3] translate | [3:6] size | [6:7] epsilon_1 | [7:8] epsilon_2 | [8:11] rotation
+_SQ_TC = build_transform_constants([
+    gls.Translate3D, gls.Translate3D, gls.Translate3D,
+    "sp_sq_size", "sp_sq_size", "sp_sq_size",
+    "sp_sq_scale", "sp_sq_scale",
+])
+sq_packed_param_to_var = make_packed_param_to_var(_SQ_TC)
+sq_packed_var_to_param = make_packed_var_to_param(_SQ_TC)
+param_to_var_sq = make_param_to_var_dispatcher(sq_packed_param_to_var)
+var_to_param_sq = make_var_to_param_dispatcher(sq_packed_var_to_param)
+_params_from_variables_fast_sq = make_param_from_variables_fast(sq_packed_var_to_param)
+
+# Cuboid: [0:3] translate | [3:6] size | [6:9] rotation
+_CUBOID_TC = build_transform_constants([
+    gls.Translate3D, gls.Translate3D, gls.Translate3D,
+    "sp_size", "sp_size", "sp_size",
+])
+cuboid_packed_param_to_var = make_packed_param_to_var(_CUBOID_TC)
+cuboid_packed_var_to_param = make_packed_var_to_param(_CUBOID_TC)
+param_to_var_cuboid = make_param_to_var_dispatcher(cuboid_packed_param_to_var)
+var_to_param_cuboid = make_var_to_param_dispatcher(cuboid_packed_var_to_param)
+_params_from_variables_fast_cuboid = make_param_from_variables_fast(cuboid_packed_var_to_param)
+
+
+# ========================== Unpack helpers ==================================
 
 def unpack_params_sq(params):
     assert params.shape[-1] == 5
@@ -11,77 +51,39 @@ def unpack_params_sq(params):
     epsilon_2 = params[..., 4:5]
     return skew_vec, epsilon_1, epsilon_2
 
-def split_sq_packed(param):
-    param_0 = param[..., :3]
-    param_1 = param[..., 3:6]
-    param_2 = param[..., 6:9]
-    param_3 = param[..., 9:10]
-    param_4 = param[..., 10:11]
-    return param_0, param_1, param_2, param_3, param_4
+def unpack_params_cuboid(params):
+    assert params.shape[-1] == 3
+    size = params[..., :3]
+    return (size,)
 
-# Processing function.
+def unpack_params_varaxis_sq(params):
+    assert params.shape[-1] == 8
+    skew_vec = params[..., :3]
+    epsilon_1 = params[..., 3:4]
+    epsilon_2 = params[..., 4:5]
+    axis_logits = params[..., 5:8]
+    return skew_vec, epsilon_1, epsilon_2, axis_logits
 
-def sq_packed_param_to_var(param: th.Tensor) -> th.Tensor:
-    """
-    param -> variable  (inverse squash)
-    Uses algebraic-tanh inverse:
-        p_unit = (1-eps) * v / sqrt(1 + v^2)
-        => v = pu / sqrt(1 - pu^2), with tiny safety.
-    """
-    p0, p1, p2, p3, p4 = split_sq_packed(param)
-
-    sym_list   = [gls.Translate3D, "sp_size", "sp_roundness", "sp_roundness", ]
-    param_list = [p0,              p2,         p3,              p4          ]
-    
-    v_list = process_param_to_var(sym_list, param_list)
-
-    v0, v2, v3, v4 = v_list
-    v1 = p1.detach().clone()                            # pass-through (non-optim)
-    # Concatenate and return a LEAF tensor for the optimizer
-    vcat = th.cat([v0, v1, v2, v3, v4], dim=-1)
-    vcat = vcat.detach().requires_grad_(True)
-    return vcat
-#  Param to var
-
-def sq_packed_var_to_param(variable: th.Tensor) -> th.Tensor:
-    """
-    variable -> param  (forward squash)
-    Algebraic-tanh squash with margin:
-        p_unit = (1-eps) * v / sqrt(1 + v^2)
-        param  = p_unit * scale + offset
-    """
-    v0, v1, v2, v3, v4 = split_sq_packed(variable)
-    sym_list = [gls.Translate3D, "sp_size", "sp_roundness", "sp_roundness", ]
-    v_parts  = [v0,              v2,         v3,              v4]
-    p_list = process_var_to_param(sym_list, v_parts)
-    p0, p2, p3, p4 = p_list
-    p1 = v1  # pass-through
-    return th.cat([p0, p1, p2, p3, p4], dim=-1)
-
-# Param to var
-def param_to_var_sq(param: th.Tensor, local_ind: int) -> th.Tensor:
-    if local_ind == 0:
-        variable = sq_packed_param_to_var(param)
-    elif local_ind == 1:
-        variable = su_param_to_var(param)
-    elif local_ind == 2:
-        variable = th.autograd.Variable(param, requires_grad=True)
+def reinit_params_varaxis_sq(prim_expr, prim_param):
+    val = AlgConf.DEFAULT_LOGITS_RESTART_VALUES[0]
+    if isinstance(prim_expr, sps.SuperQuadricY):
+        log_reinit = (val, -val, -val)
+        log_reinit_param = [th.Tensor(log_reinit).to(prim_param.device),]
+    elif isinstance(prim_expr, sps.SuperQuadricZ):
+        log_reinit = (-val, val, -val)
+        log_reinit_param = [th.Tensor(log_reinit).to(prim_param.device),]
+    elif isinstance(prim_expr, sps.SuperQuadricX):
+        log_reinit = (-val, -val, val)
+        log_reinit_param = [th.Tensor(log_reinit).to(prim_param.device),]
+    elif isinstance(prim_expr, sps.VarAxisSQ):
+        log_reinit_param = []
     else:
-        raise ValueError(f"Unsupported local index: {local_ind}")
-    return variable
+        raise ValueError(f"Unsupported primitive type: {prim_expr}")
+    return log_reinit_param
 
-# Var to param
-def var_to_param_sq(variable: th.Tensor, local_ind: int) -> th.Tensor:
-    if local_ind == 0:
-        param = sq_packed_var_to_param(variable)
-    elif local_ind == 1:
-        param = su_var_to_param(variable)
-    elif local_ind == 2:
-        param = variable
-    else:
-        raise ValueError(f"Unsupported local index: {local_ind}")
-    return param
 
+
+# ========================== Handlers ========================================
 
 @register_handler
 class SQHandler(PrimitiveHandler):
@@ -91,82 +93,23 @@ class SQHandler(PrimitiveHandler):
     packed_batched_stochastic_class = sps.SQPackedBatchedStochastic
     packed_batched_su_class = sps.SQPackedBatchedSU
     packed_batched_stochastic_su_class = sps.SQPackedBatchedStochasticSU
-    
+    batched_param_size = 11
+
     unpack_params = unpack_params_sq
     param_to_var = param_to_var_sq
     var_to_param = var_to_param_sq
+    param_from_variables_fast = _params_from_variables_fast_sq
+    batched_eval_function = batched_sq_packed_stochastic_eval
+    point2prim_hard = None
+    point2prim_soft = None
+    reinit_params = None
+    PARAM_IND_TO_NAME = {
+        0: "sp_size",
+        1: "sp_roundness_e1",
+        2: "sp_roundness_e2",
+    }
+    get_param_loss = get_param_loss_sf
 
-
-## CUBOID
-
-def unpack_params_cuboid(params):
-    assert params.shape[-1] == 3
-    size = params[..., :3]
-    return size
-
-def split_cuboid_packed(param):
-    param_0 = param[..., :3]
-    param_1 = param[..., 3:6]
-    param_2 = param[..., 6:9]
-    return param_0, param_1, param_2
-
-def cuboid_packed_param_to_var(param: th.Tensor) -> th.Tensor:
-    """
-    param -> variable  (inverse squash)
-    Uses algebraic-tanh inverse:
-        p_unit = (1-eps) * v / sqrt(1 + v^2)
-        => v = pu / sqrt(1 - pu^2), with tiny safety.
-    """
-    p0, p1, p2 = split_cuboid_packed(param)
-    sym_list   = [gls.Translate3D, "sp_size", ]
-    param_list = [p0,              p2          ]
-    v_list = process_param_to_var(sym_list, param_list)
-    v0, v2 = v_list
-    v1 = p1.detach().clone()                            # pass-through (non-optim)
-    # Concatenate and return a LEAF tensor for the optimizer
-    vcat = th.cat([v0, v1, v2], dim=-1)
-    vcat = vcat.detach().requires_grad_(True)
-    return vcat
-
-def cuboid_packed_var_to_param(variable: th.Tensor) -> th.Tensor:
-    """
-    variable -> param  (forward squash)
-    Algebraic-tanh squash with margin:
-        p_unit = (1-eps) * v / sqrt(1 + v^2)
-        param  = p_unit * scale + offset
-    """
-    v0, v1, v2 = split_cuboid_packed(variable)
-    sym_list = [gls.Translate3D, "sp_size", ]
-    v_parts  = [v0,              v2          ]
-    p_list = process_var_to_param(sym_list, v_parts)
-    p0, p2 = p_list
-    p1 = v1  # pass-through
-    return th.cat([p0, p1, p2], dim=-1)
-
-# Param to var
-def param_to_var_cuboid(param: th.Tensor, local_ind: int) -> th.Tensor:
-    if local_ind == 0:
-        variable = cuboid_packed_param_to_var(param)
-    elif local_ind == 1:
-        variable = su_param_to_var(param)
-    elif local_ind == 2:
-        variable = th.autograd.Variable(param, requires_grad=True)
-    else:
-        raise ValueError(f"Unsupported local index: {local_ind}")
-    return variable
-
-# Var to param
-def var_to_param_cuboid(variable: th.Tensor, local_ind: int) -> th.Tensor:
-    if local_ind == 0:
-        param = cuboid_packed_var_to_param(variable)
-    elif local_ind == 1:
-        param = su_var_to_param(variable)
-    elif local_ind == 2:
-        param = variable
-    else:
-        raise ValueError(f"Unsupported local index: {local_ind}")
-    return param
-# Handler
 @register_handler
 class CuboidHandler(PrimitiveHandler):
     base_class = sps.Cuboid
@@ -175,8 +118,39 @@ class CuboidHandler(PrimitiveHandler):
     packed_batched_stochastic_class = sps.CuboidPackedBatchedStochastic
     packed_batched_su_class = sps.CuboidPackedBatchedSU
     packed_batched_stochastic_su_class = sps.CuboidPackedBatchedStochasticSU
-    
+    batched_param_size = 9
+
     unpack_params = unpack_params_cuboid
     param_to_var = param_to_var_cuboid
     var_to_param = var_to_param_cuboid
-    # For CUboid loss param will be a problem
+    param_from_variables_fast = _params_from_variables_fast_cuboid
+    batched_eval_function = batched_cuboid_packed_stochastic_eval
+    point2prim_hard = None
+    point2prim_soft = None
+    reinit_params = None
+    PARAM_IND_TO_NAME = {
+        0: "sp_size",
+    }
+    get_param_loss = get_param_loss_sf
+@register_handler
+class VarAxisSQHandler(PrimitiveHandler):
+    base_class = sps.VarAxisSQ
+    packed_class = sps.VarAxisSQPacked
+    packed_batched_class = sps.VarAxisSQPackedBatched
+    packed_batched_stochastic_class = sps.VarAxisSQPackedBatchedStochastic
+    packed_batched_su_class = sps.VarAxisSQPackedBatchedSU
+    packed_batched_stochastic_su_class = sps.VarAxisSQPackedBatchedStochasticSU
+    batched_param_size = 14
+
+    unpack_params = unpack_params_varaxis_sq
+    param_to_var = param_to_var_sq
+    var_to_param = var_to_param_sq
+    param_from_variables_fast = _params_from_variables_fast_sq
+    batched_eval_function = batched_varaxis_sq_packed_stochastic_eval
+    point2prim_hard = None
+    point2prim_soft = None
+    reinit_params = reinit_params_varaxis_sq
+    PARAM_IND_TO_NAME = {
+        0: "sp_size",
+    }
+    get_param_loss = get_param_loss_sf

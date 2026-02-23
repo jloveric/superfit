@@ -7,7 +7,7 @@ import itertools
 import geolipi.symbolic as gls
 from geolipi.torch_compute.evaluate_expression import recursive_evaluate
 
-from ..symbolic.utils import inject_temp_param, fetch_singular_expr, gather_primitives
+from ..symbolic.utils import inject_temp_param, fetch_singular_expr, gather_primitives, fetch_singular_expr_eval
 from .eval_tools import get_recon_measure, get_recon_measure_packed, MeasurePack
 from ..symbolic.utils import gather_instance_dropout_alternatives, gather_smooth_union_ops, generate_from_sm_ops_and_primitives
 from ..utils.config import AlgorithmConfig as AlgConf, initialize_seeds
@@ -16,14 +16,17 @@ from ..utils.logger import logger
 
 MAX_SAMPLING_TRIES = 100
 SAMPLING_PATIENCE = 10
-TEMP_SCALE_FACTOR = 1.5
+TEMP_SCALE_FACTOR = 2.0
 MAX_INNER_LOOP_LEAVE_ONE_OUT = 100
 MIN_VOL_LIMIT = 1e-4
 
-def main_pruning_pipeline(in_expr, sketcher, measure_pack):
+def main_pruning_pipeline(in_expr, sketcher, measure_pack, post_prune=False):
     # Initialize seeds for pruning (set once at start)
-    
-    with Stats.scope("pruning"):
+    if post_prune: 
+        scope_name = "pp_pruning"
+    else:
+        scope_name = "pruning"
+    with Stats.scope(scope_name):
         cur_recon_measure = get_recon_measure(in_expr, sketcher, measure_pack)
         cur_n_prim = len(gather_primitives(in_expr))
         cur_obj = cur_recon_measure + measure_pack.len_weight * cur_n_prim
@@ -99,16 +102,18 @@ def sampling_based_pruning(in_expr, sketcher, measure_pack, n_samples=100):
     cur_recon_measure = get_recon_measure(in_expr, sketcher, measure_pack)
     cur_n_prim = len(gather_primitives(in_expr))
     cur_obj = cur_recon_measure + measure_pack.len_weight * cur_n_prim
-    logger.debug(f"Initial {measure_pack.measure}: {cur_recon_measure:.6f}")
-    logger.debug(f"Initial OBJ: {cur_obj:.6f}")
-    logger.debug(f"Initial program size: {cur_n_prim}")
+    logger.info(f"Initial {measure_pack.measure}: {cur_recon_measure:.6f}")
+    logger.info(f"Initial OBJ: {cur_obj:.6f}")
+    logger.info(f"Initial program size: {cur_n_prim}")
 
     n_tries, patience, temp_scale, prev_n_exprs = 0, 0, 1.0, 0
     stochastic_expr = inject_temp_param(in_expr, (temp_scale,))
     expr_set = set()
     while (prev_n_exprs < n_samples):
-        new_expr = fetch_singular_expr(stochastic_expr, relaxed_eval=True, remove_marker=False)
-        expr_set.add(new_expr.sympy())
+        # new_expr = fetch_singular_expr(stochastic_expr, relaxed_eval=True, remove_marker=False)
+        new_expr = fetch_singular_expr_eval(stochastic_expr, relaxed_eval=True, remove_marker=False)
+        if not new_expr is None:
+            expr_set.add(new_expr.sympy())
         n_exprs = len(expr_set)
         if patience > SAMPLING_PATIENCE:
             temp_scale *= TEMP_SCALE_FACTOR
@@ -121,11 +126,11 @@ def sampling_based_pruning(in_expr, sketcher, measure_pack, n_samples=100):
         if n_tries > MAX_SAMPLING_TRIES:
             break
     expr_set = list(expr_set)
-    logger.debug(f"Found {len(expr_set)} unique expressions")
+    logger.info(f"Found {len(expr_set)} unique expressions")
     # Batch eval:
     recon_measures, n_prims, objs = batch_eval(expr_set, measure_pack, sketcher)
-    best_ind = th.argmax(objs)
-    best_expr = expr_set[best_ind].tensor(dtype=sketcher.dtype)
+    best_ind = th.argmax(objs).item()
+    best_expr = expr_set[best_ind]
     logger.info(f"Best {measure_pack.measure}: {recon_measures[best_ind]:.6f}")
     logger.info(f"Best OBJ: {objs[best_ind]:.6f}")
     logger.info(f"Best program size: {n_prims[best_ind]}")
@@ -140,9 +145,9 @@ def top_down_pruning(in_expr, sketcher, measure_pack):
     cur_recon_measure = get_recon_measure(in_expr, sketcher, measure_pack)
     cur_n_prim = len(gather_primitives(in_expr))
     cur_obj = cur_recon_measure + measure_pack.len_weight * cur_n_prim
-    logger.debug(f"Initial {measure_pack.measure}: {cur_recon_measure:.6f}")
-    logger.debug(f"Initial OBJ: {cur_obj:.6f}")
-    logger.debug(f"Initial program size: {cur_n_prim}")
+    logger.info(f"Initial {measure_pack.measure}: {cur_recon_measure:.6f}")
+    logger.info(f"Initial OBJ: {cur_obj:.6f}")
+    logger.info(f"Initial program size: {cur_n_prim}")
 
     top_down_alternatives = gather_top_down_alterns(in_expr)
     top_down_alternatives.append(in_expr)
@@ -162,9 +167,9 @@ def top_down_pruning_recursive(in_expr, sketcher, measure_pack):
     cur_recon_measure = get_recon_measure(in_expr, sketcher, measure_pack)
     cur_n_prim = len(gather_primitives(in_expr))
     cur_obj = cur_recon_measure + measure_pack.len_weight * cur_n_prim
-    logger.debug(f"Initial {measure_pack.measure}: {cur_recon_measure:.6f}")
-    logger.debug(f"Initial OBJ: {cur_obj:.6f}")
-    logger.debug(f"Initial program size: {cur_n_prim}")
+    logger.info(f"Initial {measure_pack.measure}: {cur_recon_measure:.6f}")
+    logger.info(f"Initial OBJ: {cur_obj:.6f}")
+    logger.info(f"Initial program size: {cur_n_prim}")
 
     best_expr, best_recon_measure, best_n_prim, best_obj = __top_down_pruning(in_expr, sketcher, measure_pack)
     logger.info(f"Best {measure_pack.measure}: {best_recon_measure:.6f}")
@@ -177,14 +182,17 @@ def leave_one_out_pruning(in_expr, sketcher, measure_pack):
     cur_recon_measure = get_recon_measure(in_expr, sketcher, measure_pack)
     cur_n_prim = len(gather_primitives(in_expr))
     cur_obj = cur_recon_measure + measure_pack.len_weight * cur_n_prim
-    logger.debug(f"Initial {measure_pack.measure}: {cur_recon_measure:.6f}")
-    logger.debug(f"Initial OBJ: {cur_obj:.6f}")
-    logger.debug(f"Initial program size: {cur_n_prim}")
+    logger.info(f"Initial {measure_pack.measure}: {cur_recon_measure:.6f}")
+    logger.info(f"Initial OBJ: {cur_obj:.6f}")
+    logger.info(f"Initial program size: {cur_n_prim}")
 
     # Check which singular ones can be left out.
     # Try all NCN combinations of leaving them out. 
     primitives = gather_primitives(in_expr)
     sm_ops = gather_smooth_union_ops(in_expr)
+    if len(primitives) <= 1:
+        logger.info("==== Only one primitive found ====")
+        return in_expr, cur_recon_measure, cur_n_prim, cur_obj
 
     instance_dropout_alternatives = gather_instance_dropout_alternatives(in_expr)
 
@@ -200,7 +208,7 @@ def leave_one_out_pruning(in_expr, sketcher, measure_pack):
     if len(loo_valids) == 0:
         # Early exit!
         return in_expr, cur_recon_measure, cur_n_prim, cur_obj
-    logger.debug(f"==== Found {len(loo_valids)} drop options ====")
+    logger.info(f"==== Found {len(loo_valids)} drop options ====")
 
     n_selects = len(loo_valids)
     best_obj = cur_obj
@@ -208,17 +216,18 @@ def leave_one_out_pruning(in_expr, sketcher, measure_pack):
     best_n_prim = cur_n_prim
     best_expr = in_expr
     while n_selects > 0:
-        logger.debug(f"=== Selecting {n_selects} out of {len(loo_valids)} ====")
+        logger.info(f"=== Selecting {n_selects} out of {len(loo_valids)} ====")
         removal_options = list(itertools.combinations(loo_valids, n_selects))
         if len(removal_options) > MAX_INNER_LOOP_LEAVE_ONE_OUT:
-            logger.debug(f"==== Sampling {MAX_INNER_LOOP_LEAVE_ONE_OUT} out of {len(removal_options)} ====")
+            logger.info(f"==== Sampling {MAX_INNER_LOOP_LEAVE_ONE_OUT} out of {len(removal_options)} ====")
             removal_options = random.sample(removal_options, MAX_INNER_LOOP_LEAVE_ONE_OUT)
         all_exprs = []
         for removal_option in removal_options:
             temp_ops = [x for ind, x in enumerate(sm_ops) if ind +1 not in removal_option]
             temp_primitives = [x for ind, x in enumerate(primitives) if ind not in removal_option]
             temp_expr = generate_from_sm_ops_and_primitives(temp_ops, temp_primitives)
-            all_exprs.append(temp_expr)
+            if not temp_expr is None:
+                all_exprs.append(temp_expr)
         recon_measures, n_prims, objs = batch_eval(all_exprs, measure_pack, sketcher)
         recon_measures = np.stack(recon_measures)
         cur_best_ind = np.argmax(recon_measures)
@@ -244,22 +253,25 @@ def leave_one_out_greedy_pruning(in_expr, sketcher, measure_pack):
     cur_recon_measure = get_recon_measure(in_expr, sketcher, measure_pack)
     cur_n_prim = len(gather_primitives(in_expr))
     cur_obj = cur_recon_measure + measure_pack.len_weight * cur_n_prim
-    logger.debug(f"Initial {measure_pack.measure}: {cur_recon_measure:.6f}")
-    logger.debug(f"Initial OBJ: {cur_obj:.6f}")
-    logger.debug(f"Initial program size: {cur_n_prim}")
+    logger.info(f"Initial {measure_pack.measure}: {cur_recon_measure:.6f}")
+    logger.info(f"Initial OBJ: {cur_obj:.6f}")
+    logger.info(f"Initial program size: {cur_n_prim}")
 
     # Check which singular ones can be left out.
     # Try all NCN combinations of leaving them out. 
     primitives = gather_primitives(in_expr)
     sm_ops = gather_smooth_union_ops(in_expr)
+    if len(primitives) <= 1:
+        logger.info("==== Only one primitive found ====")
+        return in_expr, cur_recon_measure, cur_n_prim, cur_obj
 
     instance_dropout_alternatives = gather_instance_dropout_alternatives(in_expr)
 
     if len(instance_dropout_alternatives) == 0:
-        logger.debug("==== No drop options found ====")
+        logger.info("==== No drop options found ====")
         return in_expr, cur_recon_measure, cur_n_prim, cur_obj
     else:
-        logger.debug(f"==== Found {len(instance_dropout_alternatives)} drop options ====")
+        logger.info(f"==== Found {len(instance_dropout_alternatives)} drop options ====")
 
     recon_measures, n_prims, objs = batch_eval(instance_dropout_alternatives, measure_pack, sketcher)
     n_alterns = len(instance_dropout_alternatives)
@@ -270,7 +282,7 @@ def leave_one_out_greedy_pruning(in_expr, sketcher, measure_pack):
     if len(loo_valids) == 0:
         # Early exit!
         return in_expr, cur_recon_measure, cur_n_prim, cur_obj
-    logger.debug(f"==== Found {len(loo_valids)} drop options ====")
+    logger.info(f"==== Found {len(loo_valids)} drop options ====")
     try_0_removal = False
     if 0 in loo_valids:
         # Remove it separately?
@@ -290,7 +302,11 @@ def leave_one_out_greedy_pruning(in_expr, sketcher, measure_pack):
             temp_ops = [x for ind, x in enumerate(sm_ops) if ind + 1 not in cur_removes]
             temp_primitives = [x for ind, x in enumerate(primitives) if ind not in cur_removes]
             temp_expr = generate_from_sm_ops_and_primitives(temp_ops, temp_primitives)
-            all_exprs.append(temp_expr)
+            if not temp_expr is None:
+                all_exprs.append(temp_expr)
+        if not all_exprs:
+            logger.info("==== No valid expressions found ====")
+            break
         recon_measures, n_prims, objs = batch_eval(all_exprs, measure_pack, sketcher)
         recon_measures = np.stack(recon_measures)
         cur_best_ind = np.argmax(recon_measures)
@@ -300,7 +316,7 @@ def leave_one_out_greedy_pruning(in_expr, sketcher, measure_pack):
         cur_best_expr = all_exprs[cur_best_ind]
         best_option = candidate_removals[cur_best_ind]
         if cur_best_obj >= best_obj:
-            logger.debug(f"Best option {best_option} improved from {best_obj:.6f} to {cur_best_obj:.6f}")
+            logger.info(f"Best option {best_option} improved from {best_obj:.6f} to {cur_best_obj:.6f}")
             best_expr = cur_best_expr
             best_recon_measure = cur_best_recon_measure
             best_n_prim = cur_best_n_prim
@@ -312,10 +328,10 @@ def leave_one_out_greedy_pruning(in_expr, sketcher, measure_pack):
             #         candidate_removals.remove(candidate_removals[ind])
             additional_removes.append(best_option)
         else:
-            logger.debug(f"Best option {best_option} did not improve from {best_obj:.6f} to {cur_best_obj:.6f}")
+            logger.info(f"Best option {best_option} did not improve from {best_obj:.6f} to {cur_best_obj:.6f}")
             break
     if try_0_removal:
-        logger.debug("==== Trying 0 removal ====")
+        logger.info("==== Trying 0 removal ====")
         primitives = gather_primitives(best_expr)
         sm_ops = gather_smooth_union_ops(best_expr)
         temp_ops = [x for ind, x in enumerate(sm_ops) if ind != 0]
@@ -327,7 +343,7 @@ def leave_one_out_greedy_pruning(in_expr, sketcher, measure_pack):
         cur_n_prim = len(gather_primitives(temp_expr))
         cur_obj = cur_recon_measure + measure_pack.len_weight * cur_n_prim
         if cur_obj >= best_obj:
-            logger.debug(f"0 removal improved from {best_obj:.6f} to {cur_obj:.6f}")
+            logger.info(f"0 removal improved from {best_obj:.6f} to {cur_obj:.6f}")
             best_expr = temp_expr
             best_recon_measure = cur_recon_measure
             best_n_prim = cur_n_prim
@@ -345,14 +361,17 @@ def prune_tiny_parts(in_expr, sketcher, measure_pack):
     cur_recon_measure = get_recon_measure(in_expr, sketcher, measure_pack)
     cur_n_prim = len(gather_primitives(in_expr))
     cur_obj = cur_recon_measure + measure_pack.len_weight * cur_n_prim
-    logger.debug(f"Initial {measure_pack.measure}: {cur_recon_measure:.6f}")
-    logger.debug(f"Initial OBJ: {cur_obj:.6f}")
-    logger.debug(f"Initial program size: {cur_n_prim}")
+    logger.info(f"Initial {measure_pack.measure}: {cur_recon_measure:.6f}")
+    logger.info(f"Initial OBJ: {cur_obj:.6f}")
+    logger.info(f"Initial program size: {cur_n_prim}")
 
     # Check which singular ones can be left out.
     # Try all NCN combinations of leaving them out. 
     primitives = gather_primitives(in_expr)
     sm_ops = gather_smooth_union_ops(in_expr)
+    if len(primitives) <= 1:
+        logger.info("==== Only one primitive found ====")
+        return in_expr, cur_recon_measure, cur_n_prim, cur_obj
 
     n_prims = []
     all_execs = []
@@ -368,11 +387,11 @@ def prune_tiny_parts(in_expr, sketcher, measure_pack):
     if 0 in removal_options:
         removal_options.remove(0)
     if len(removal_options) == 0:
-        logger.debug("==== No tiny parts found ====")
+        logger.info("==== No tiny parts found ====")
         # Early exit!
         return in_expr, cur_recon_measure, cur_n_prim, cur_obj
         
-    logger.debug(f"==== Found {len(removal_options)} drop options ====")
+    logger.info(f"==== Found {len(removal_options)} drop options ====")
     candidate_removals = [x for x in removal_options]
     best_obj = cur_obj
     best_recon_measure = cur_recon_measure
@@ -386,7 +405,11 @@ def prune_tiny_parts(in_expr, sketcher, measure_pack):
             temp_ops = [x for ind, x in enumerate(sm_ops) if ind +1 not in cur_removes]
             temp_primitives = [x for ind, x in enumerate(primitives) if ind not in cur_removes]
             temp_expr = generate_from_sm_ops_and_primitives(temp_ops, temp_primitives)
-            all_exprs.append(temp_expr)
+            if not temp_expr is None:
+                all_exprs.append(temp_expr)
+        if not all_exprs:
+            logger.info("==== No valid expressions found ====")
+            break
         recon_measures, n_prims, objs = batch_eval(all_exprs, measure_pack, sketcher)
         recon_measures = np.stack(recon_measures)
         cur_best_ind = np.argmax(recon_measures)
@@ -396,7 +419,7 @@ def prune_tiny_parts(in_expr, sketcher, measure_pack):
         cur_best_expr = all_exprs[cur_best_ind]
         best_option = candidate_removals[cur_best_ind]
         if cur_best_obj >= best_obj:
-            logger.debug(f"Best option {best_option} improved from {best_obj:.6f} to {cur_best_obj:.6f}")
+            logger.info(f"Best option {best_option} improved from {best_obj:.6f} to {cur_best_obj:.6f}")
             best_expr = cur_best_expr
             best_recon_measure = cur_best_recon_measure
             best_n_prim = cur_best_n_prim
@@ -407,7 +430,7 @@ def prune_tiny_parts(in_expr, sketcher, measure_pack):
             #     if objs[ind] < best_obj:
             #         candidate_removals.remove(candidate_removals[ind])
         else:
-            logger.debug(f"Best option {best_option} did not improve from {best_obj:.6f} to {cur_best_obj:.6f}")
+            logger.info(f"Best option {best_option} did not improve from {best_obj:.6f} to {cur_best_obj:.6f}")
             break
     logger.info(f"Best {measure_pack.measure}: {best_recon_measure:.6f}")
     logger.info(f"Best OBJ: {best_obj:.6f}")
@@ -430,6 +453,9 @@ def prune_tiny_parts_v2(in_expr, sketcher, measure_pack):
     # Try all NCN combinations of leaving them out. 
     primitives = gather_primitives(in_expr)
     sm_ops = gather_smooth_union_ops(in_expr)
+    if len(primitives) <= 1:
+        logger.info("==== Only one primitive found ====")
+        return in_expr, cur_recon_measure, cur_n_prim, cur_obj
 
     n_prims = []
     all_execs = []
@@ -454,11 +480,11 @@ def prune_tiny_parts_v2(in_expr, sketcher, measure_pack):
         removal_options.remove(0)
     
     if len(removal_options) == 0:
-        logger.debug("==== No tiny parts found ====")
+        logger.info("==== No tiny parts found ====")
         # Early exit!
         return in_expr, cur_recon_measure, cur_n_prim, cur_obj
 
-    logger.debug(f"==== Found {len(removal_options)} prims to drop ====")
+    logger.info(f"==== Found {len(removal_options)} prims to drop ====")
     temp_ops = [x for ind, x in enumerate(sm_ops) if ind +1 not in removal_options]
     temp_primitives = [x for ind, x in enumerate(primitives) if ind not in removal_options]
     if try_0_removal and len(temp_ops) > 1:
@@ -552,12 +578,12 @@ def batch_eval(expr_set, measure_pack, sketcher):
     obj = [x.item() for x in objs]
     best_ind = th.argmax(objs)
     # Log best and worst metrics
-    logger.debug(f"Lowest {measure_pack.measure}: {min(recon_measures):.6f}")
-    logger.debug(f"Highest {measure_pack.measure}: {max(recon_measures):.6f}")
+    logger.info(f"Lowest {measure_pack.measure}: {min(recon_measures):.6f}")
+    logger.info(f"Highest {measure_pack.measure}: {max(recon_measures):.6f}")
     # length of the program
-    logger.debug(f"Lowest program size: {min(n_prims)}")
-    logger.debug(f"Highest program size: {max(n_prims)}")
+    logger.info(f"Lowest program size: {min(n_prims)}")
+    logger.info(f"Highest program size: {max(n_prims)}")
     # obj
-    logger.debug(f"Lowest OBJ: {min(obj):.6f}")
-    logger.debug(f"Highest OBJ: {max(obj):.6f}")
+    logger.info(f"Lowest OBJ: {min(obj):.6f}")
+    logger.info(f"Highest OBJ: {max(obj):.6f}")
     return recon_measures, n_prims, objs

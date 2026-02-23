@@ -1,24 +1,51 @@
 # Add singular and batch. 
 # and from here add the older ones. 
-import os
 import torch as th
 import torch.nn.functional as F
-from geolipi.torch_compute.sketcher import Sketcher
-from geolipi.torch_compute.evaluate_expression import rec_eval, _parse_param_from_expr
-from geolipi.torch_compute.unroll_expression import rec_unroll, LocalContext, _process_params
 from geolipi.torch_compute.constants import EPSILON
 from geolipi.torch_compute.maps import PRIMITIVE_MAP
 import geolipi.torch_compute.transforms as transform_bank
-from geolipi.torch_compute.transforms import axis_angle_to_rotation_matrix
-import geolipi.symbolic as gls
-from geolipi.torch_compute.sdf_functions_3d import sdf3d_inexact_super_quadrics
-# from .batch_ops import _sdf_smooth_union_pair
+from geolipi.torch_compute.sdf_functions_3d import sdf3d_box, sdf3d_inexact_super_quadrics
 import superfit.symbolic as sps
 from superfit.symbolic.utils import sample_gumbel
 
 ### HACK!!
-IDENTITY_MAT = th.eye(4, device="cuda")
+IDENTITY_MAT = th.eye(4, dtype=th.float32)
+BULGE_EPS = 1e-5
 
+def unpack_sf_params(params: th.Tensor) -> th.Tensor:
+    translate = params[..., :3]
+    size = params[..., 3:6]
+    roundness = params[..., 6:7]
+    dilate_3d = params[..., 7:8]
+    scale = params[..., 8:9]
+    bulge_ratio = params[..., 9:10]
+    onion_ratio = params[..., 10:11]
+    rotate = params[..., 11:14]
+    return translate, size, roundness, dilate_3d, scale, bulge_ratio, onion_ratio, rotate
+
+def  cuboid_eval(coords: th.Tensor, size: th.Tensor) -> th.Tensor:
+    size = size / 2.0
+    sdf_eval = sdf3d_box(coords, size)
+    return sdf_eval
+
+def superquadric_eval(coords: th.Tensor, size: th.Tensor, epsilon_1: th.Tensor, epsilon_2: th.Tensor) -> th.Tensor:
+    size = size / 2.0
+    coords = coords[..., [0, 2, 1]]
+    sdf_eval = sdf3d_inexact_super_quadrics(coords, size, epsilon_1, epsilon_2)
+    return sdf_eval
+
+
+def varaxis_sq_eval(coords: th.Tensor, size: th.Tensor, 
+            epsilon_1: th.Tensor, epsilon_2: th.Tensor, logits: th.Tensor, temperature=1.0) -> th.Tensor:
+
+    # --- ST gumbel-softmax: one-hot forward, soft backward
+    P = varaxis_P(coords, logits, temperature)
+    # --- apply permutation to coords and size
+    coords_p = coords @ P  # (...,3)
+    size_p = size @ P      # (...,3) typically (3,)
+    new_sdf = superquadric_eval(coords_p, size_p, epsilon_1, epsilon_2)
+    return new_sdf
 
 def sdf2d_half_rounded_box(points: th.Tensor, bounds: th.Tensor, radius: th.Tensor | float) -> th.Tensor:
     """
@@ -85,16 +112,18 @@ def sp_original_eval(coords: th.Tensor, size, roundness, onion_2d, dilate_3d) ->
     return sdf3d
 
 
-def map_arc_bulge(points, z, bulge, eps=1e-5):
+def map_arc_bulge(points, z, bulge, eps=BULGE_EPS):
     """
     Python / PyTorch port of GLSL mapArcBulge.
     Works with (..., 2) or (..., 3) points; returns (..., 2).
     """
     p = points[..., :2]                                  # ensure (..., 2)
+    # p[..., 0] = p[..., 0] * th.sign(bulge)
     px, py = p[..., 0], p[..., 1]
+    px = px * th.sign(bulge)
 
     half_z = 0.5 * z
-    theta_top = th.clamp_min(bulge * (th.pi * 0.5), eps) # cheaper than clamp(min=)
+    theta_top = th.clamp_min(th.abs(bulge) * (th.pi * 0.5), eps) # cheaper than clamp(min=)
 
     # center and radius (center at (center_pos, 0))
     center_pos = half_z / th.tan(theta_top)
@@ -134,6 +163,7 @@ def map_arc_bulge(points, z, bulge, eps=1e-5):
     # --- mix with th.where (no dtype casts, no multiplies) ---
     out = th.where(mask_above[..., None], above_point, inside_point)
     out = th.where(mask_below[..., None], below_point, out)
+    out = th.stack([out[..., 0] * th.sign(bulge), out[..., 1]], dim=-1)
     return out
 
 def sd_taper_trapezoid_onion_exact(pos_2d: th.Tensor,
@@ -197,21 +227,6 @@ def sp_tapered_onion_eval(coords: th.Tensor,
                      dilate_3d: th.Tensor | float,
                      scale: th.Tensor | float,
                      onion_ratio: th.Tensor | float) -> th.Tensor:
-    """
-    PyTorch port of GLSL NeoTapered (shape-safe):
-
-      uv = p.xy
-      r  = roundness * 0.5 * min(size.x, size.y)
-      sdf2d = HalfRoundedRectangle2D(uv, size.xy, r)
-
-      pos_2d = (sdf2d, p.z)
-      inner_deep  = 0.5 * min(size.x, size.y)
-      half_height = 0.5 * size.z
-      x3 = -(1.0 - scale) * inner_deep
-
-      sd = sdTaperTrapezoidExact(pos_2d, inner_deep, half_height, x3)
-      return sd - dilate_3d
-    """
     # Unpack coordinates
     xy = coords[..., :2]                # (N,2)
     z  = coords[..., 2]                 # (N,)
@@ -250,20 +265,14 @@ def superfrustum_eval(coords: th.Tensor, size: th.Tensor,
 
 ### NTC Packed ###
 def superfrustum_packed_eval(coords, params):
-    translate = params[..., :3]
-    rotate = params[..., 3:6]
-    size = params[..., 6:9]
-    roundness = params[..., 9:10]
-    dilate_3d = params[..., 10:11]
-    scale = params[..., 11:12]
-    bulge_ratio = params[..., 12:13]
-    onion_ratio = params[..., 13:14]
+    unpacked_params = unpack_sf_params(params)
+    translate, size, roundness, dilate_3d, scale, bulge_ratio, onion_ratio, rotate = unpacked_params
     # NEED to make this transform correctly. 
     pad = th.ones_like(coords[..., -1:])
     points_homog = th.cat([coords, pad], dim=-1)
     
-    translate_transform = transform_bank.get_affine_translate_3D(IDENTITY_MAT.clone(), translate)
-    rotate_transform = transform_bank.get_affine_rotate_axis_angle_3D(IDENTITY_MAT.clone(), rotate)
+    translate_transform = transform_bank.get_affine_translate_3D(IDENTITY_MAT.clone().to(translate.device), translate)
+    rotate_transform = transform_bank.get_affine_rotate_axis_angle_3D(IDENTITY_MAT.clone().to(rotate.device), rotate)
     new_transform = rotate_transform @ translate_transform
     tranformed_coords = th.einsum("ij,mj->mi", new_transform, points_homog)
 
@@ -298,17 +307,10 @@ def solid_sf_eval(coords: th.Tensor, size: th.Tensor,
     return new_sdf
 
 def solid_sf_packed_eval(coords, params, temperature):
-    translate = params[..., :3]
-    rotate = params[..., 3:6]
-    size = params[..., 6:9]
-    roundness = params[..., 9:10]
-    dilate_3d = params[..., 10:11]
-    scale = params[..., 11:12]
-    bulge_ratio = params[..., 12:13]
-    onion_ratio = params[..., 13:14]
-    logits = params[..., 14:18]
-
     
+    unpacked_params = unpack_sf_params(params)
+    translate, size, roundness, dilate_3d, scale, bulge_ratio, onion_ratio, rotate = unpacked_params
+    logits = params[..., 14:18]
     g  = sample_gumbel(logits.shape, device=logits.device, dtype=logits.dtype)
     w  = th.softmax((logits + g) / temperature, dim=-1)  # (..., 2)
     w_cube = w[..., 0:1]
@@ -326,16 +328,11 @@ def solid_sf_packed_eval(coords, params, temperature):
     new_params = th.cat([translate, rotate, size, roundness, dilate_3d, scale, bulge_ratio, onion_ratio], dim=-1)
     out_eval = superfrustum_packed_eval(coords, new_params)
     return out_eval
+
 # Other option - just update the tables used in the origin code. 
 
-def varaxis_sf_eval(coords: th.Tensor, size: th.Tensor, 
-            roundness: th.Tensor | float, dilate_3d: th.Tensor | float, 
-            scale: th.Tensor | float, bulge_ratio: th.Tensor | float, 
-            onion_ratio: th.Tensor | float, logits: th.Tensor, temperature=1.0) -> th.Tensor:
+def varaxis_P(coords, logits, temperature=1.0):
 
-    # --- ST gumbel-softmax: one-hot forward, soft backward
-    # y is (3,) and is exactly one-hot in forward.
-    
     y = F.gumbel_softmax(logits, tau=temperature, hard=True, dim=-1)  # (3,)
 
 
@@ -351,12 +348,18 @@ def varaxis_sf_eval(coords: th.Tensor, size: th.Tensor,
 
     P = (y @ P_stack.reshape(3, 9)).reshape(3, 3)   # (3,3)
     P = th.einsum('k,kij->ij', y, P_stack)  # (3,3)
+    return P
 
+
+def varaxis_sf_eval(coords: th.Tensor, size: th.Tensor, 
+            roundness: th.Tensor | float, dilate_3d: th.Tensor | float, 
+            scale: th.Tensor | float, bulge_ratio: th.Tensor | float, 
+            onion_ratio: th.Tensor | float, logits: th.Tensor, temperature=1.0) -> th.Tensor:
+
+    # --- ST gumbel-softmax: one-hot forward, soft backward
+    P = varaxis_P(coords, logits, temperature)
     # --- apply permutation to coords and size
     coords_p = coords @ P  # (...,3)
-
-    # Ensure size is (3,) (broadcast-friendly)
-    # If size is (...,3), this still works as long as last dim is 3.
     size_p = size @ P      # (...,3) typically (3,)
     new_sdf = superfrustum_eval(coords_p, size_p, roundness, dilate_3d, scale, bulge_ratio, onion_ratio)
     return new_sdf
@@ -370,20 +373,152 @@ def superfrustum_z_eval(coords: th.Tensor, size: th.Tensor, *args, **kwargs) -> 
 def superfrustum_x_eval(coords: th.Tensor, size: th.Tensor, *args, **kwargs) -> th.Tensor:
     return superfrustum_eval(coords[..., [2, 0, 1]], size[..., [2, 0, 1]], *args, **kwargs)
 
+def superquadric_y_eval(coords: th.Tensor, size: th.Tensor, *args, **kwargs) -> th.Tensor:
+    return superquadric_eval(coords, size, *args, **kwargs)
+
+def superquadric_z_eval(coords: th.Tensor, size: th.Tensor, *args, **kwargs) -> th.Tensor:
+    return superquadric_eval(coords[..., [1, 2, 0]], size[..., [1, 2, 0]], *args, **kwargs)
+
+def superquadric_x_eval(coords: th.Tensor, size: th.Tensor, *args, **kwargs) -> th.Tensor:
+    return superquadric_eval(coords[..., [2, 0, 1]], size[..., [2, 0, 1]], *args, **kwargs)
+
+def sp_proto_y_eval(coords: th.Tensor, size: th.Tensor, *args, **kwargs) -> th.Tensor:
+    return sp_proto_eval(coords, size, *args, **kwargs)
+
+def sp_proto_z_eval(coords: th.Tensor, size: th.Tensor, *args, **kwargs) -> th.Tensor:
+    return sp_proto_eval(coords[..., [1, 2, 0]], size[..., [1, 2, 0]], *args, **kwargs)
+
+def sp_proto_x_eval(coords: th.Tensor, size: th.Tensor, *args, **kwargs) -> th.Tensor:
+    return sp_proto_eval(coords[..., [2, 0, 1]], size[..., [2, 0, 1]], *args, **kwargs)
+
+
+def sp_proto_eval(
+    coords: th.Tensor,                 # (..., 3)
+    size: th.Tensor,                   # (3,) or (..., 3) broadcastable to coords batch
+    roundness: th.Tensor | float,      # (4,) / (...,4) / scalar-broadcastable
+    dilate_3d: th.Tensor | float,      # scalar or broadcastable to (...,)
+    onion_ratio: th.Tensor | float,    # scalar or broadcastable to (...,)
+    extrussion: th.Tensor | float,     # (2,) / (...,2) / scalar-broadcastable
+    on_eps: float = 1e-8,
+) -> th.Tensor:
+    """
+    PyTorch port of GLSL SPProto.
+
+    GLSL reference:
+      float SPProto(vec3 p, vec3 size, vec4 roundness, float dilate_3d, float onion_ratio, vec2 extrussion)
+
+    Returns:
+      sdf (...,)
+    """
+
+    # ---- unpack coords ----
+    q2 = coords[..., :2]          # (...,2) : p.xy
+    z = coords[..., 2]            # (...,)
+
+
+    # If size is (3,), expand logically via broadcasting; same for others.
+    size = size / 2.0
+    sx = size[..., 0]
+    sy = size[..., 1]
+    sz = size[..., 2]
+
+    # ---- common scales ----
+    min_size = th.minimum(sx, sy)     # (...,) or scalar-broadcasted
+    halfZ = sz
+
+    r4 = roundness * min_size[..., None]    # (...,4)
+    ex_scale = th.minimum(min_size, halfZ)  # (...,)
+    ex = extrussion * ex_scale[..., None]   # (...,2)
+
+    onion_amount = onion_ratio * min_size   # (...,)
+
+    # ---- 2D rounded box with per-corner selection ----
+    # rx = (x>0)? r4.xy : r4.zw
+    mask_x = (q2[..., 0] > 0.0)[..., None]                 # (...,1)
+    rx = th.where(mask_x, r4[..., 0:2], r4[..., 2:4])      # (...,2)
+
+    # rc = (y>0)? rx.x : rx.y
+    rc = th.where(q2[..., 1] > 0.0, rx[..., 0], rx[..., 1])  # (...,)
+
+    # a = abs(q2) - size.xy + rc
+    a = th.abs(q2) - size[..., :2] + rc[..., None]         # (...,2)
+
+    # d = min(max(a.x,a.y),0) + length(max(a,0)) - rc
+    m = th.clamp_min(a, 0.0)
+    d = th.minimum(th.maximum(a[..., 0], a[..., 1]), th.zeros_like(rc)) \
+        + th.linalg.norm(m, dim=-1) - rc
+
+    # ---- pre-extrude inset/outset ----
+    thv = 0.5 * th.maximum(ex[..., 0], ex[..., 1]) + min_size - onion_amount
+    d = th.abs(d + thv) - thv
+
+    # ---- asymmetric extrusion rounding by z sign ----
+    er = th.where(z < 0.0, ex[..., 0], ex[..., 1])
+    h = halfZ - er
+
+    # ---- rounded extrusion ----
+    qx = d + er
+    qy = th.abs(z) - h
+
+    i = th.minimum(th.maximum(qx, qy), th.zeros_like(qx))
+    o = th.stack((th.clamp_min(qx, 0.0), th.clamp_min(qy, 0.0)), dim=-1)
+    d = i + th.linalg.norm(o, dim=-1) - er
+
+    # ---- optional onion ----
+    # GLSL:
+    # if (onion_amount > ON_EPS) d = abs(d + onion_amount) - onion_amount;
+    # vectorized equivalent:
+    onion_applied = th.abs(d + onion_amount) - onion_amount
+    d = th.where(onion_amount > on_eps, onion_applied, d)
+
+    # ---- final dilate ----
+    return d - dilate_3d
+
+
+def varaxis_spp_eval( 
+    coords: th.Tensor,                 # (..., 3)
+    size: th.Tensor,                   # (3,) or (..., 3) broadcastable to coords batch
+    roundness: th.Tensor | float,      # (4,) / (...,4) / scalar-broadcastable
+    dilate_3d: th.Tensor | float,      # scalar or broadcastable to (...,)
+    onion_ratio: th.Tensor | float,    # scalar or broadcastable to (...,)
+    extrussion: th.Tensor | float,     # (2,) / (...,2) / scalar-broadcastable
+    logits: th.Tensor, 
+    on_eps: float = 1e-8,
+    temperature=1.0) -> th.Tensor:
+
+    # --- ST gumbel-softmax: one-hot forward, soft backward
+    P = varaxis_P(coords, logits, temperature)
+    # --- apply permutation to coords and size
+    coords_p = coords @ P  # (...,3)
+    size_p = size @ P      # (...,3) typically (3,)
+    new_sdf = sp_proto_eval(coords_p, size_p, roundness, dilate_3d, onion_ratio, extrussion)
+    return new_sdf
+
 function_map = {
-    sps.SPBase: sp_simple_eval,
-    sps.SPNeo: sp_original_eval,
-    # sps.SPConicApprox: sp_conic_approx_eval,
-    # sps.SPConicV2Approx: sp_conic_approx_eval,
-    # sps.SPConicWrong: sp_conic_wrong_eval,
+    sps.Cuboid: cuboid_eval,
+    # sps.CuboidPacked: cuboid_packed_eval,
+    sps.SuperQuadric: superquadric_eval,
+    # sps.SQPacked: sq_packed_eval,
     sps.SuperFrustum: superfrustum_eval,
     sps.SuperFrustumPacked: superfrustum_packed_eval,
+    sps.SPProto: sp_proto_eval,
+    # sps.SPProtoPacked: sp_proto_packed_eval,
     sps.SolidSF: solid_sf_eval,
     sps.SolidSFPacked: solid_sf_packed_eval,
+
     sps.VarAxisSF: varaxis_sf_eval,
+    sps.VarAxisSQ: varaxis_sq_eval,
+    sps.VarAxisSPP: varaxis_spp_eval,
+
     sps.SuperFrustumY: superfrustum_y_eval,
     sps.SuperFrustumZ: superfrustum_z_eval,
     sps.SuperFrustumX: superfrustum_x_eval,
+    sps.SuperQuadricX: superquadric_x_eval,
+    sps.SuperQuadricY: superquadric_y_eval,
+    sps.SuperQuadricZ: superquadric_z_eval,
+    sps.SPProtoX: sp_proto_x_eval,
+    sps.SPProtoY: sp_proto_y_eval,
+    sps.SPProtoZ: sp_proto_z_eval,
 
 }
 PRIMITIVE_MAP.update(function_map)

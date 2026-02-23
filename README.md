@@ -5,7 +5,8 @@ Code Release for Resfit.
 To provide: 
 
 1. All the different primitives: 
-    (Cuboid, SQ, NeoPrim, SF, SFSolid)
+    [Full Support] - (Cuboid, SQ, SF, SFSolid, SFVarAxis, ProtoPrim, SG/VarAxis... ) 
+    Shader only - (SFV1, SFV2Exact SFV2Approx, SFChamfer, UberPrim)
     1. Torch Execution
     2. Shader Code. 
 
@@ -20,13 +21,25 @@ To provide:
 
 4. Applications:
     1. Mesh to fit.  
+        a) Export to editing version / html
     2. Fit Color To generate Textured Assets.
-    3. Prim Assembly to Editing setup (support export (to Mesh / etc)
+        b) Export to editing version / html
+    3. Generate Optimization videos. 
     4. Text to 3D to Primitive 
     5. Primitive to 3D Gen with Space Control.  
     6. Mesh to Solid Fitting. 
 
-5. Eval Code.
+5. Eval Over Dataset Code.
+
+6. Useful Jupyter Notebooks.
+
+# New Additions: 
+PaperVersion
+CurrentBest
+
+1. BiDir Sampling
+2. VarAxis Primitive
+3. Semantics / Macro TBD. 
 
 # Ablations to try
 
@@ -40,13 +53,3 @@ To provide:
 
 
 # Best ones: 
-
-1. Nano banana -> 
-2. off the shelf. 
-
-
-
-1. Generate cache
-2. Run Mesh to PA
-3. Run Eval, Run Material Fit, Run Generate Edit HTML.
-4. Generate Visualization.

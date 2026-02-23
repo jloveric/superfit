@@ -8,7 +8,7 @@ from superfit.utils.stats import Stats
 from superfit.utils.logger import logger
 from superfit.algos.resfit import resfit
 import superfit.utils.config as config_options
-from superfit.utils.mesh_preprocess import process_mesh_to_sdf
+from superfit.utils.mesh_preprocess import cd_based_process_mesh_to_sdf
 from superfit.utils.io import to_cpu_recursive
 from superfit.utils.constants import AOT_ARTIFACT_DIR
 from superfit.utils.io import save_html
@@ -35,7 +35,9 @@ def main_shape_wise(args):
     else:
         AlgConf.FastMode = False
         AlgConf.TorchCompile = False
-    config_options.check_config()
+    AlgConf.PRIM_TYPE = "VarAxisSF"
+    AlgConf.OPT_POST_PRUNE = True
+    AlgConf.BIDIR = True
     save_config_file = os.path.join(save_dir, "config.json")
     AlgConf.save_to_file(save_config_file)
     # Assuming we are running the baseline version.
@@ -49,7 +51,7 @@ def main_shape_wise(args):
     save_file_temp = os.path.join(save_dir, f"stepwise.pkl")
 
     sketcher_3d = Sketcher(resolution=AlgConf.DATA_RESOLUTION, n_dims=3)
-    mesh, target_sdf = process_mesh_to_sdf(input_file, sketcher_3d)
+    mesh, target_sdf = cd_based_process_mesh_to_sdf(input_file, sketcher_3d)
 
     if not mesh.is_watertight:
         raise ValueError(f"------- Non Watertight Mesh -------")

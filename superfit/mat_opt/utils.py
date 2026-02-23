@@ -15,7 +15,8 @@ from ..symbolic.utils import fetch_singular_expr_eval
 from sysl.utils import recursive_sm_to_smg
 from .color_utils import srgb_to_linear
 
-def initialize_texture_grid(device="cuda", grid_size=(64, 64), init_value=0.5):
+GRID_SIZE = (128, 128)
+def initialize_texture_grid(device="cuda", grid_size=GRID_SIZE, init_value=0.5):
     """
     Initialize a texture grid tensor for SphericalRGBGrid3D.
     
@@ -33,7 +34,7 @@ def initialize_texture_grid(device="cuda", grid_size=(64, 64), init_value=0.5):
     return texture
 
 
-def recursive_add_spherical_tex(gls_expr, ind=0, version="v4", device="cuda", grid_size=(64, 64)):
+def recursive_add_spherical_tex(gls_expr, ind=0, version="v4", device="cuda", grid_size=GRID_SIZE):
     """
     Recursively convert geometric expression to material expression with textures.
     

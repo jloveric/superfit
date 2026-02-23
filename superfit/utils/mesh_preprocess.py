@@ -8,6 +8,15 @@ from .constants import MIN_VOLUME_LIMIT
 from .logger import logger
 import cc3d
 
+CD_THRESHOLD = 0.001
+INFATE_AMOUNT = 0.02
+
+def quick_sample_points(mesh, sketcher, n_points=10000):
+    # Ensure normals exist (needed only if you want smooth normals)
+    # Sample uniformly on the surface
+    points, _ = trimesh.sample.sample_surface(mesh, n_points)
+    points = th.from_numpy(points).float().to(sketcher.device)
+    return points
     
 def extract_mesh(cur_file, *, concatenate=True, process=False, fix_mirrors=True):
     """
@@ -92,36 +101,6 @@ def normalize_mesh(input_mesh):
     input_mesh.apply_scale(0.9)
     return input_mesh
 
-# def normalize_to_unit_cube(mesh: trimesh.Trimesh, margin=0.9):
-#     """
-#     Move mesh so its bbox min goes to (0,0,0), scale to fit in [-1,1]^3,
-#     translate to (-1,-1,-1), then apply a margin. Done with ONE transform.
-#     """
-#     # Use mesh.bounds for fast bbox
-#     bmin, bmax = mesh.bounds  # shape (3,)
-#     extent = (bmax - bmin)
-#     mesh_range = extent.max()
-#     print("max range", mesh_range)
-
-#     # Build transforms (right-multiply order)
-#     def T_translate(t):
-#         T = np.eye(4, dtype=np.float64)
-#         T[:3, 3] = t
-#         return T
-
-#     def T_scale(s):
-#         T = np.eye(4, dtype=np.float64)
-#         T[0, 0] = T[1, 1] = T[2, 2] = s
-#         return T
-
-#     T = np.eye(4, dtype=np.float64)
-#     T = T @ T_translate(-bmin)                 # shift bbox min to origin
-#     T =  T_scale(2/mesh_range)  @ T       # scale to ~[-1,1] after next translation
-#     T = T_translate((-1.0, -1.0, -1.0)) @T   # move to corner of [-1,1]^3
-#     T =  T_scale(margin) @ T                   # shrink a bit (0.9)
-
-#     mesh.apply_transform(T)  # single cache invalidation
-#     return mesh
 def normalize_to_unit_cube(mesh: trimesh.Trimesh, margin=0.9):
     """
     Normalize a mesh to fit within [-margin, margin]^3 (e.g., 90% of unit cube),
@@ -157,18 +136,6 @@ def get_mask_scaled_aabb(points: th.Tensor,
     Returns:    
         th.Tensor of shape (M,) where M <= N
     """
-    # bmin, bmax = mesh.bounds  # (2, 3)
-    # center = (bmin + bmax) / 2.0
-    # extent = (bmax - bmin) * scale / 2.0
-
-    # scaled_bmin = center - extent
-    # scaled_bmax = center + extent
-
-    # scaled_bmin = th.tensor(scaled_bmin, dtype=points.dtype, device=points.device)
-    # scaled_bmax = th.tensor(scaled_bmax, dtype=points.dtype, device=points.device)
-
-    # mask = (points >= scaled_bmin) & (points <= scaled_bmax)
-    # inside_mask = mask.all(dim=1)
 
     bmin, bmax = mesh.bounds  # numpy arrays
     padded_bmin = bmin - padding
@@ -289,7 +256,7 @@ def target_cleanup_v2(target_sdf, sketcher_3d, min_volume_limit=MIN_VOLUME_LIMIT
     return final_sdf
 
 
-def process_mesh_to_sdf(input_mesh_file, sketcher_3d, inflate=False, inflate_amount=0.01):
+def process_mesh_to_sdf(input_mesh_file, sketcher_3d, inflate=False, inflate_amount=INFATE_AMOUNT):
     """
     Process a mesh file through the full pipeline to generate SDF and mesh.
     
@@ -304,12 +271,62 @@ def process_mesh_to_sdf(input_mesh_file, sketcher_3d, inflate=False, inflate_amo
     input_mesh = extract_mesh(input_mesh_file)
     input_mesh = normalize_to_unit_cube(input_mesh)
     target_sdf = get_target_cubvh(input_mesh, sketcher_3d, mode="raystab")
-    target_sdf = target_cleanup_v2(target_sdf, sketcher_3d)
-    target_sdf = renorm_target_sdf(target_sdf, sketcher_3d)
     # Inflate?
     if inflate:
         target_sdf = target_sdf - inflate_amount
-        target_sdf = renorm_target_sdf(target_sdf, sketcher_3d)
+    target_sdf = renorm_target_sdf(target_sdf, sketcher_3d)
+    target_sdf = target_cleanup_v2(target_sdf, sketcher_3d)
+    target_sdf = renorm_target_sdf(target_sdf, sketcher_3d)
     
     mesh = sdf_to_mesh(target_sdf, sketcher_3d)
     return mesh, target_sdf
+
+def process_v2_inflate_mesh(input_mesh_file, sketcher_3d, inflate_amount=INFATE_AMOUNT):
+
+    mesh1, target_sdf_1 = process_mesh_to_sdf(input_mesh_file, sketcher_3d, inflate=False, inflate_amount=inflate_amount)
+    input_mesh = extract_mesh(input_mesh_file)
+    input_mesh = normalize_to_unit_cube(input_mesh)
+    target_sdf = get_target_cubvh(input_mesh, sketcher_3d, mode="raystab")
+    target_sdf = target_sdf - inflate_amount
+    target_sdf = renorm_target_sdf(target_sdf, sketcher_3d)
+    out_sdf = target_cleanup_v2(target_sdf, sketcher_3d)
+    out_sdf = renorm_target_sdf(out_sdf, sketcher_3d)
+
+    # Make the orig inflated
+    inflated_orig = target_sdf_1 - inflate_amount
+    inflated_orig = renorm_target_sdf(inflated_orig, sketcher_3d)
+
+    rem = th.maximum(out_sdf, -inflated_orig)
+    rem = renorm_target_sdf(rem, sketcher_3d)
+    final_sdf = th.minimum(target_sdf_1, rem)
+    final_sdf = renorm_target_sdf(final_sdf, sketcher_3d)
+    final_sdf = target_cleanup_v2(final_sdf, sketcher_3d)
+    final_sdf = renorm_target_sdf(final_sdf, sketcher_3d)
+
+    final_mesh = sdf_to_mesh(final_sdf, sketcher_3d)
+    return final_mesh, final_sdf
+
+def cd_based_process_mesh_to_sdf(input_mesh_file, sketcher_3d, inflate=False, inflate_amount=INFATE_AMOUNT):
+    input_mesh = extract_mesh(input_mesh_file)
+    input_mesh = normalize_to_unit_cube(input_mesh)
+    mesh_v1, target_sdf_v1 = process_mesh_to_sdf(input_mesh_file, sketcher_3d, inflate=inflate, inflate_amount=inflate_amount)
+    if inflate:
+        return mesh_v1, target_sdf_v1, 0.0
+    do_inflate = False
+    if mesh_v1.faces.shape[0] == 0:
+        cd_avg = 100.0
+        do_inflate = True
+    else:
+        pc_1 = quick_sample_points(input_mesh, sketcher_3d)
+        pc_2 = quick_sample_points(mesh_v1, sketcher_3d)
+        cd = th.cdist(pc_1, pc_2, p=2) ** 2
+        cd_1 = th.min(cd, dim=1)[0]
+        cd_2 = th.min(cd, dim=0)[0] 
+        cd_avg = (th.mean(cd_1) + th.mean(cd_2)) / 2.0
+        if cd_avg >= CD_THRESHOLD:
+            do_inflate = True
+    if do_inflate:
+        mesh_v2, target_sdf_v2 = process_v2_inflate_mesh(input_mesh_file, sketcher_3d, inflate_amount=inflate_amount)
+        return mesh_v2, target_sdf_v2, cd_avg
+    else:
+        return mesh_v1, target_sdf_v1, cd_avg

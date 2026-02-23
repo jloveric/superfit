@@ -1,7 +1,11 @@
+import json
 import numpy as np
 import distinctipy
+import sympy as sp
+import torch as th
 import geolipi.symbolic as gls
 import superfit.symbolic as sps
+from sympy import Tuple as SympyTuple, Float as SympyFloat, Integer as SympyInteger
 from sysl.shader.global_shader_context import GlobalShaderContext
 from sysl.shader.evaluate_multipass import rec_sdf_shader_eval
 from ..symbolic.utils import extract_primitive_bundles, n_prims_in_expr, recursive_sf_to_sfsp
@@ -158,6 +162,41 @@ def create_auxiliary_sf_textured(new_expr, primitive_expr=None):
     return auxiliary
 
 
+def expression_from_varmap(varnamed_expr_str, varmap):
+    """
+    Build a GeoLIPI expression from the varnamed expression string and edited variable values.
+
+    Uses the same state format as geolipi: a dict with "expr_str" and "symbol_tensor_map".
+    The varmap (from the JS editor or var_map_edited.json) provides the values for var_0,
+    var_1, ... which are injected via gls.GLFunction.from_state.
+
+    Args:
+        varnamed_expr_str: String representation of the expression with var_0, var_1, ...
+            (from the varnamed expression used to generate the shader / editor).
+        varmap: Dict of {"var_0": [0.5, 0.5, 0.5], "var_1": [0, 0, 0, 0], ...}
+                (edited values from the frontend or loaded JSON).
+
+    Returns:
+        A gls.GLFunction expression with the varmap values applied.
+    """
+    symbol_tensor_map = {
+        sp.Symbol(k): th.tensor(v, dtype=th.float32) if isinstance(v, (list, tuple)) else th.tensor([float(v)], dtype=th.float32)
+        for k, v in varmap.items()
+    }
+    state = {
+        "expr_str": varnamed_expr_str,
+        "symbol_tensor_map": symbol_tensor_map,
+        "GLFunction": True,
+    }
+    return gls.GLFunction.from_state(state)
+
+
+def load_varmap_json(filepath):
+    """Load a varmap JSON file exported from the editor."""
+    with open(filepath, "r") as f:
+        return json.load(f)
+
+
 def save_edit_mode_html(expression, sketcher_3d, save_file_name="edit_mode.html", is_textured=False):
 
     if is_textured:
@@ -175,13 +214,14 @@ def save_edit_mode_html(expression, sketcher_3d, save_file_name="edit_mode.html"
         ntc_ss_expr, _ = recursive_gls_to_sysl(ntc_ss_expr.sympy(), 1, 
                                 version="v4", mode="simple", colors=colors)
 
+    primitive_expr = get_sfsp_editing_expr()
+    
     if is_textured:
         auxiliary = create_auxiliary_sf_textured(ntc_ss_expr, primitive_expr)  
     else:
         auxiliary = create_auxiliary_sf(ntc_ss_expr, primitive_expr)  
     new_expr = fetch_singular_expr_eval(ntc_ss_expr.sympy(), relaxed_eval=False, remove_marker=True)
     
-    primitive_expr = get_sfsp_editing_expr()
 
     shader_bundles = evaluate_to_shader(new_expr.sympy(), settings=DEFAULT_EDITING_SETTINGS, 
                                             mode="multipass",

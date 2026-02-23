@@ -1,8 +1,8 @@
 import torch as th
 from geolipi.torch_compute.constants import EPSILON
 
-def sample_gumbel(shape, eps=1e-10, device=None):
-    U = th.rand(shape, device=device)
+def sample_gumbel(shape, eps=1e-10, device=None, dtype=None):
+    U = th.rand(shape, device=device, dtype=dtype)
     return -th.log(-th.log(U + eps) + eps)
 
 def map_arc_bulge(points, z, bulge, eps=1e-5):
@@ -12,9 +12,10 @@ def map_arc_bulge(points, z, bulge, eps=1e-5):
     """
     p = points[:, :, :2]                                  # ensure (..., 2)
     px, py = p[:, :, 0], p[:, :, 1]
+    px = px * th.sign(bulge)
 
     half_z = 0.5 * z
-    theta_top = th.clamp_min(bulge * (th.pi * 0.5), eps) # cheaper than clamp(min=)
+    theta_top = th.clamp_min(th.abs(bulge) * (th.pi * 0.5), eps) # cheaper than clamp(min=)
 
     # center and radius (center at (center_pos, 0))
     center_pos = half_z / th.tan(theta_top)
@@ -54,6 +55,7 @@ def map_arc_bulge(points, z, bulge, eps=1e-5):
     # --- mix with th.where (no dtype casts, no multiplies) ---
     out = th.where(mask_above[:, :, None], above_point, inside_point)
     out = th.where(mask_below[:, :, None], below_point, out)
+    out = out * th.sign(bulge)[:, :, None]
     return out
 
 def axis_angle_to_rotation_matrix(axis_angle: th.Tensor) -> th.Tensor:
@@ -81,49 +83,6 @@ def axis_angle_to_rotation_matrix(axis_angle: th.Tensor) -> th.Tensor:
 
     return R
 
-def axis_angle_to_rotation_matrix2(axis_angle: th.Tensor, eps: float = 1e-8) -> th.Tensor:
-    """
-    axis_angle: (..., 3) axis-angle vector, where direction is axis and magnitude is angle (radians)
-    returns: (..., 3, 3)
-    Compile-friendly (torch.compile) implementation.
-    """
-    # angle: (..., 1)
-    theta = th.linalg.norm(axis_angle, dim=-1, keepdim=True)
-
-    # Safe normalized axis: (..., 3)
-    axis = axis_angle / (theta + eps)
-
-    x = axis[..., 0]
-    y = axis[..., 1]
-    z = axis[..., 2]
-
-    ct = th.cos(theta[..., 0])
-    st = th.sin(theta[..., 0])
-    one_m_ct = 1.0 - ct
-
-    # Rodrigues closed form
-    r00 = ct + x * x * one_m_ct
-    r01 = x * y * one_m_ct - z * st
-    r02 = x * z * one_m_ct + y * st
-
-    r10 = y * x * one_m_ct + z * st
-    r11 = ct + y * y * one_m_ct
-    r12 = y * z * one_m_ct - x * st
-
-    r20 = z * x * one_m_ct - y * st
-    r21 = z * y * one_m_ct + x * st
-    r22 = ct + z * z * one_m_ct
-
-    R = th.stack(
-        (r00, r01, r02,
-         r10, r11, r12,
-         r20, r21, r22),
-        dim=-1
-    )
-
-    # Use reshape with explicit dims; avoids tuple math like axis.shape[:-1] + (3,3)
-    out_shape = axis_angle.shape[:-1] + (3, 3)
-    return R.reshape(out_shape)
 
 def _sdf_smooth_union_pair(sdf_a: th.Tensor, sdf_b: th.Tensor, k: th.Tensor) -> th.Tensor:
     """
@@ -288,13 +247,5 @@ def batched_sf_packed_stochastic_su_eval(coords, params, su_vals, logits, temper
         k_reshaped = su_vals[i-1].unsqueeze(-1)
         out = _sdf_smooth_union_pair(out, output[i], k_reshaped)
     
-    # out = output.select(0, 0)
-
-    # # reshape all ks once to broadcast with your SDF tensors
-    # # (assumes you want a trailing singleton dim like your unsqueeze(-1))
-    # ks = su_vals[: K - 1].reshape(K - 1, *([1] * (out.ndim - 1)), 1)
-
-    # for b, k in zip(output.unbind(0)[1:], ks.unbind(0)):
-    #     out = _sdf_smooth_union_pair(out, b, k)
 
     return (output, out)

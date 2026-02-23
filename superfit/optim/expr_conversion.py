@@ -5,26 +5,10 @@ from .primitive_registry import PrimitiveHandler
 from ..symbolic.utils import gather_primitives
 from ..symbolic.utils import gather_smooth_union_ops, generate_from_sm_ops_and_primitives
 from ..utils.config import AlgorithmConfig as AlgConf
-
-VALID_PACKED_CLASSES = (sps.SuperFrustumPacked, 
-                        sps.SolidSFPacked,
-                        sps.VarAxisSFPacked,
-                        sps.SQPacked,
-                        sps.CuboidPacked)
-VALID_BATCHED_SU_CLASSES = (sps.SuperFrustumPackedBatchedSU,
-                            sps.SolidSFPackedBatchedSU,
-                            sps.VarAxisSFPackedBatchedSU,
-                            sps.SQPackedBatchedSU,
-                            sps.CuboidPackedBatchedSU)
-VALID_BATCHED_STOCHASTIC_SU_CLASSES = (sps.SuperFrustumPackedBatchedStochasticSU,
-                                        sps.SolidSFPackedBatchedStochasticSU,
-                                        sps.VarAxisSFPackedBatchedStochasticSU,
-                                        sps.SQPackedBatchedStochasticSU,
-                                        sps.CuboidPackedBatchedStochasticSU)
+from ..symbolic.symbolic_types import VALID_PACKED_CLASSES, VALID_BATCHED_SU_CLASSES, VALID_BATCHED_STOCHASTIC_SU_CLASSES, VARAXIS_EXECUTED_CLASSES
 
 def convert_to_packed(expr, handler: PrimitiveHandler):
     if isinstance(expr, sps.PrimitiveMarker):
-        # Expr = PrimitiveMarker(StochasticPrimitive(Translate(AARotate(NeoTapered))))
         if isinstance(expr.args[0], sps.StochasticPrimitive):
             has_stochastic = True
             stochastic_expr = expr.args[0]
@@ -42,8 +26,10 @@ def convert_to_packed(expr, handler: PrimitiveHandler):
         rotate_arg = rotate_expr.get_arg(1)
         n_args = len(prim_expr.args)
         sp_tapered_arg = [prim_expr.get_arg(i) for i in range(n_args)]
-        
-        new_param = [translate_arg, rotate_arg, *sp_tapered_arg]
+        if isinstance(prim_expr, VARAXIS_EXECUTED_CLASSES):
+            log_reinit_param = handler.reinit_params(prim_expr, sp_tapered_arg[0])
+            sp_tapered_arg.extend(log_reinit_param)
+        new_param = [translate_arg, *sp_tapered_arg, rotate_arg]
         new_param = th.cat(new_param, dim=-1)
         packed_class = handler.packed_class
         new_expr = packed_class(new_param)
@@ -63,7 +49,6 @@ def convert_to_packed(expr, handler: PrimitiveHandler):
 
 def convert_to_unpacked(expr, handler: PrimitiveHandler):
     if isinstance(expr, sps.PrimitiveMarker):
-        # Expr = PrimitiveMarker(StochasticPrimitive(Translate(AARotate(NeoTapered))))
         if isinstance(expr.args[0], sps.StochasticPrimitive):
             has_stochastic = True
             stochastic_expr = expr.args[0]
@@ -76,8 +61,8 @@ def convert_to_unpacked(expr, handler: PrimitiveHandler):
         packed_expr = next_expr.args[0]
         packed_arg = packed_expr.get_arg(0)
         translate_arg = packed_arg[..., :3]
-        rotate_arg = packed_arg[..., 3:6]
-        unpacked_vars = handler.unpack_params(packed_arg[..., 6:])
+        rotate_arg = packed_arg[..., -3:]
+        unpacked_vars = handler.unpack_params(packed_arg[..., 3:-3])
         base_class = handler.base_class
         new_primitive = base_class(*unpacked_vars)
 

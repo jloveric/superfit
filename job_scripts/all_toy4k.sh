@@ -64,9 +64,11 @@ for ((gpu=0; gpu<NUM_GPUS; gpu++)); do
             set +a
         fi
         # Activate conda environment
-        conda activate superfit
+        conda activate sf
         cd "$SCRIPT_DIR"
-        python scripts/generate_on_testset.py --start_ind $CURRENT_START --end_ind $CURRENT_END --ablation $ABLATION --fastmode --overwrite --aot_postfix $AOT_POSTFIX
+        python scripts/testset_fit_primitives.py --start_ind $CURRENT_START --end_ind $CURRENT_END --ablation $ABLATION --fastmode --overwrite --aot_postfix $AOT_POSTFIX
+        # python scripts/testset_fit_primitives.py --start_ind $CURRENT_START --end_ind $CURRENT_END --ablation $ABLATION --fastmode --overwrite --aot_postfix $AOT_POSTFIX --dataset partobjaverse
+        # python scripts/texture_on_testset.py --start_ind $CURRENT_START --end_ind $CURRENT_END --input_dir /users/aganesh8/data/aganesh8/data/project_neo/outputs/partobjaverse/ablation_2_param --save_html
     ) > "${LOG_DIR}/proc_${gpu}_${AOT_POSTFIX}.out" 2>&1 &
     
     CURRENT_START=$CURRENT_END

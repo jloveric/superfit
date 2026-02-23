@@ -6,7 +6,8 @@ import numpy as np
 import sysl.symbolic as sls
 import geolipi.symbolic as gls
 import time
-from superfit.optim.utils import quick_sample_points, perform_stochastic_precondition, sample_surface_proximal_points
+from superfit.optim.utils import perform_stochastic_precondition, sample_surface_proximal_points
+from superfit.utils.mesh_preprocess import quick_sample_points
 from superfit.optim.param_conversion import params_from_variables, transform_to_tunable
 from sysl.torch_compute.evaluate_mat_expr import recursive_evaluate_mat_expr
 from sysl.shader.utils.texture import gather_textures

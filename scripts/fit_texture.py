@@ -64,7 +64,6 @@ def main(args: argparse.Namespace):
     logger.info("Loading and processing mesh...")
     global_mesh = extract_mesh(input_mesh_file)
     global_mesh = normalize_to_unit_cube(global_mesh)
-    # target_mesh, target_sdf = process_mesh_to_sdf(input_mesh_file, sketcher_3d)
     
     output_sdf = recursive_evaluate(base_geometric_expr.tensor(), sketcher_3d)
     sample_mesh = sdf_to_mesh(output_sdf, sketcher_3d)

@@ -1,10 +1,12 @@
 import numpy as np
 import torch as th
+import os
 import random
 import torch.nn.functional as F
 from sysl.torch_compute.mat_combinators import sdf_geom_only_smooth_union, sdf_smooth_union
 from .param_conversion import params_from_variables
 from ..utils.config import AlgorithmConfig as AlgConf
+from ..utils.constants import SEMANTIC_LOC
 from ..utils.logger import logger
 
 # if partfield is not installed, import the following. 
@@ -30,10 +32,10 @@ class SemanticLossHolder:
         parser = default_argument_parser()
         args = parser.parse_args([
             "-c", 
-            "/sensei-fs-3/users/aganeshan/projects/ext/PartField/configs/final/demo.yaml", 
+            os.path.join(SEMANTIC_LOC, "configs/final/demo.yaml"), 
             "--opts", 
             "continue_ckpt",
-            "/sensei-fs-3/users/aganeshan/projects/ext/PartField/model/model_objaverse.ckpt"
+            os.path.join(SEMANTIC_LOC, "model/model_objaverse.ckpt")
             ])
         cfg = setup(args, freeze=False)
         seed_everything(cfg.seed)

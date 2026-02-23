@@ -6,7 +6,44 @@ import geolipi.symbolic as gls
 from geolipi.symbolic.symbol_types import PRIM_TYPE
 from geolipi.torch_compute.transforms import axis_angle_to_rotation_matrix
 import superfit.symbolic as sps
+from .symbolic_types import VALID_BATCHED_STOCHASTIC_SU_CLASSES, VARAXIS_CLASSES, SFSP_CLASSES, SFSP_UNRAVEL_CLASSES
 from .base import StochasticPrimitive, PrimitiveMarker
+
+
+VARAXIS_MAP = {
+    sps.VarAxisSF: {
+        0: sps.SuperFrustumY,
+        1: sps.SuperFrustumZ,
+        2: sps.SuperFrustumX,
+    },
+    sps.VarAxisSQ: {
+        0: sps.SuperQuadricY,
+        1: sps.SuperQuadricZ,
+        2: sps.SuperQuadricX,
+    },
+    sps.VarAxisSG: {
+        0: sps.SuperGeonY,
+        1: sps.SuperGeonZ,
+        2: sps.SuperGeonX,
+    },
+    sps.VarAxisSPP: {
+        0: sps.SPProtoY,
+        1: sps.SPProtoZ,
+        2: sps.SPProtoX,
+    },
+}
+
+sfsp_conversion_map = {
+    sps.SFSPX: sps.SuperFrustumX,
+    sps.SFSPY: sps.SuperFrustumY,
+    sps.SFSPZ: sps.SuperFrustumZ,
+    sps.SuperFrustumX: sps.SFSPX,
+    sps.SuperFrustumY: sps.SFSPY,
+    sps.SuperFrustumZ: sps.SFSPZ,
+    sps.SuperFrustum: sps.SFSP,
+    sps.SFSP: sps.SuperFrustum,
+}
+
 
 def sample_gumbel(shape, eps=1e-10, device=None, dtype=th.float32):
     U = th.rand(shape, device=device, dtype=dtype)
@@ -41,21 +78,25 @@ def inject_stochastic_prim(
 
 
 
-def recursive_ntc_to_ntc_ss(gls_expr):
-    if isinstance(gls_expr, sps.NTC):
+def recursive_sfsp_to_sf(gls_expr):
+    if isinstance(gls_expr, SFSP_CLASSES):
         new_args = []
         cur_expr = gls_expr.sympy()
-        ntc_args = [cur_expr.get_arg(i) for i in range(len(gls_expr.args))]
-        arg_0 = ntc_args[0]
-        arg_1 = (ntc_args[1][0], ntc_args[2][0], ntc_args[3][0], ntc_args[4][0],)
-        new_expr = sps.NTC_SS(arg_0, arg_1)
+        ntc_args = cur_expr.get_args()
+        new_expr = sfsp_conversion_map[gls_expr.__class__](ntc_args[0], 
+                    (ntc_args[1][0],), 
+                    (ntc_args[1][1],), 
+                    (ntc_args[1][2],), 
+                    (ntc_args[1][3],), 
+                    ntc_args[2])
         return new_expr
     else:
         if isinstance(gls_expr, gls.GLFunction):
+            old_args = gls_expr.get_args()
             new_args = []
-            for arg in gls_expr.args:
+            for arg in old_args:
                 if isinstance(arg, gls.GLBase):
-                    out_expr = recursive_ntc_to_ntc_ss(arg)
+                    out_expr = recursive_sfsp_to_sf(arg)
                     new_args.append(out_expr)
                 else:
                     new_args.append(arg)
@@ -64,14 +105,14 @@ def recursive_ntc_to_ntc_ss(gls_expr):
             return gls_expr
 
 def recursive_sf_to_sfsp(gls_expr):
-    if isinstance(gls_expr, sps.SuperFrustum):
+    if isinstance(gls_expr, SFSP_UNRAVEL_CLASSES):
         new_args = []
         cur_expr = gls_expr.sympy()
-        ntc_args = [cur_expr.get_arg(i) for i in range(len(gls_expr.args))]
+        ntc_args = cur_expr.get_args()
         arg_0 = ntc_args[0]
         arg_1 = (ntc_args[1][0], ntc_args[2][0], ntc_args[3][0], ntc_args[4][0],)
         arg_2 = ntc_args[5]
-        new_expr = sps.SFSP(arg_0, arg_1, arg_2)
+        new_expr = sfsp_conversion_map[gls_expr.__class__](arg_0, arg_1, arg_2)
         return new_expr
     else:
         if isinstance(gls_expr, gls.GLFunction):
@@ -85,7 +126,6 @@ def recursive_sf_to_sfsp(gls_expr):
             return gls_expr.__class__(*new_args)
         else:
             return gls_expr
-
 
 def convert_axis_angle_to_euler(axis_angle: th.Tensor) -> th.Tensor:
     """
@@ -164,8 +204,9 @@ def fetch_singular_expr_stochastic(expr, relaxed_eval=True):
         N = logits.shape[0]
         device = logits.device
         gumbel_noise = sample_gumbel((N,), device=device)
-        gumbel_soft = th.nn.functional.softmax((logits + gumbel_noise) / temperature, dim=0) 
-        sel_ind = th.multinomial(gumbel_soft, 1).item()  # int
+        sel_ind = (logits / temperature + gumbel_noise).argmax(dim=-1).item()
+        # gumbel_soft = th.nn.functional.softmax((logits + gumbel_noise) / temperature, dim=0) 
+        # sel_ind = th.multinomial(gumbel_soft, 1).item()  # int
     else:
         sel_ind = th.argmax(logits).item()  # int
     if sel_ind == 0:
@@ -174,13 +215,8 @@ def fetch_singular_expr_stochastic(expr, relaxed_eval=True):
         selected_expr = gls.NullExpression3D()
     return selected_expr
 
-VARAXIS_MAP = {
-    0: sps.SuperFrustumY,
-    1: sps.SuperFrustumZ,
-    2: sps.SuperFrustumX,
-}
 
-def reduce_varaxis_sf(expr, temperature: float = 0.1, relaxed_eval: bool = True):
+def reduce_varaxis(expr, temperature: float = 0.1, relaxed_eval: bool = True):
     params = expr.get_args()
 
     # Expect last argument to be logits over 3 axis variants
@@ -190,11 +226,11 @@ def reduce_varaxis_sf(expr, temperature: float = 0.1, relaxed_eval: bool = True)
     if relaxed_eval:
         # Gumbel-max sampling: argmax((logits + g)/tau) gives a categorical sample.
         g = sample_gumbel(logits.shape, device=logits.device, dtype=logits.dtype)
-        sel_ind = ((logits + g) / temperature).argmax(dim=-1).item()
+        sel_ind = (logits / temperature + g).argmax(dim=-1).item()
     else:
         sel_ind = logits.argmax(dim=-1).item()
 
-    new_expr = VARAXIS_MAP[int(sel_ind)](*remaining_args)
+    new_expr = VARAXIS_MAP[expr.__class__][int(sel_ind)](*remaining_args)
     return new_expr
 
 def fetch_singular_expr(expr, temperature=0.1, relaxed_eval=True, remove_marker=True):
@@ -252,8 +288,8 @@ def fetch_singular_expr_eval(expr, temperature=0.1, relaxed_eval=True, remove_ma
         new_expr = fetch_singular_expr_stochastic(expr, relaxed_eval=relaxed_eval)
         out_expr = fetch_singular_expr_eval(new_expr, temperature=temperature, relaxed_eval=relaxed_eval, remove_marker=remove_marker)
         return out_expr
-    elif isinstance(expr, sps.VarAxisSF):
-        new_expr = reduce_varaxis_sf(expr, temperature=temperature, relaxed_eval=relaxed_eval)
+    elif isinstance(expr, VARAXIS_CLASSES):
+        new_expr = reduce_varaxis(expr, temperature=temperature, relaxed_eval=relaxed_eval)
         return new_expr
     elif isinstance(expr, PrimitiveMarker):
         in_expr = fetch_singular_expr_eval(expr.args[0], temperature=temperature, relaxed_eval=relaxed_eval, remove_marker=remove_marker)
@@ -318,8 +354,7 @@ def inject_temp_param(expression: gls.GLBase, temperature: float | th.Tensor) ->
             return StochasticPrimitive(prim_expr, dropout_prob, temperature)
         else:
             raise ValueError(f"Invalid number of arguments for StochasticPrimitive: {len(expression.args)}")
-    elif isinstance(expression, (sps.SuperFrustumPackedBatchedStochasticSU, 
-                                sps.SolidSFPackedBatchedStochasticSU)):
+    elif isinstance(expression, VALID_BATCHED_STOCHASTIC_SU_CLASSES):
         proc_args = []
         for arg in expression.args:
             if arg in expression.lookup_table:
@@ -336,7 +371,7 @@ def inject_temp_param(expression: gls.GLBase, temperature: float | th.Tensor) ->
                 prim_expr = expression.lookup_table[prim_expr]
             return expression.__class__(prim_expr, sm_ops, logits, temperature)
         else:
-            raise ValueError(f"Invalid number of arguments for NeoTaperedPackedBatchedSU: {len(expression.args)}")
+            raise ValueError(f"Invalid number of arguments for {expression.__class__.__name__}: {len(expression.args)}")
     else:
         if isinstance(expression, gls.GLFunction):
             new_args = []
@@ -363,8 +398,7 @@ def remove_temp_param(expression: gls.GLBase) -> gls.GLBase:
             return expression
         else:
             raise ValueError(f"Invalid number of arguments for StochasticPrimitive: {len(expression.args)}")
-    elif isinstance(expression, (sps.SuperFrustumPackedBatchedStochasticSU, 
-                                sps.SolidSFPackedBatchedStochasticSU)):
+    elif isinstance(expression, VALID_BATCHED_STOCHASTIC_SU_CLASSES):
         if len(expression.args) == 4:
             prim_params, sm_ops, logits, temperature = expression.args
             if prim_params in expression.lookup_table:
@@ -377,7 +411,7 @@ def remove_temp_param(expression: gls.GLBase) -> gls.GLBase:
         elif len(expression.args) == 3:
             return expression
         else:
-            raise ValueError(f"Invalid number of arguments for NeoTaperedPackedBatchedStochasticSU: {len(expression.args)}")
+            raise ValueError(f"Invalid number of arguments for {expression.__class__.__name__}: {len(expression.args)}")
     else:
         if isinstance(expression, gls.GLFunction):
             new_args = []

@@ -15,7 +15,7 @@ from .prim_initialize import get_init_prim_program, simple_cleanup_volumetric, g
 from .estimate_init_params import generate_prim_initializations
 import superfit.symbolic as sps
 from .eval_tools import get_recon_measure, MeasurePack
-from .decompose_msd import msd_new
+from .decompose_msd import msd
 from ..utils.config import AlgorithmConfig as AlgConf
 from ..utils.stats import Stats
 from ..utils.logger import logger
@@ -25,8 +25,6 @@ from .eval_tools import eval_shape
     
 def resfit(target_mesh, 
     save_file=None,
-    early_stop=True,
-    record_param=False, 
     perform_eval=True,
     ):
 
@@ -80,7 +78,7 @@ def resfit(target_mesh,
                 with th.no_grad():
                     # HACK: Helps with thin sheets. 
                     # masked_target_sdf = masked_target_sdf - 0.005
-                    pruned_parts, _ = msd_new(masked_target_sdf, decompose_sketcher, **AlgConf.DECOMPOSE_CONFIG)
+                    pruned_parts, _ = msd(masked_target_sdf, decompose_sketcher, **AlgConf.DECOMPOSE_CONFIG)
                     if len(pruned_parts) == 0:
                         logger.info("===No parts found - Reached Stopping Criteria===")
                         break
@@ -103,6 +101,7 @@ def resfit(target_mesh,
             if cur_obj > cur_best_obj:
                 cur_best_program = running_program
                 cur_best_obj = cur_obj
+                cur_best_recon_measure = cur_recon_measure
             
             with Stats.timer("optimization"):
                 measure_pack.target_sdf = target_sdf_opt
@@ -115,6 +114,7 @@ def resfit(target_mesh,
             if Stats.get("opt_obj") > cur_best_obj:
                 cur_best_program = running_program
                 cur_best_obj = Stats.get("opt_obj")
+                cur_best_recon_measure = Stats.get("opt_recon_measure")
             
             if AlgConf.DO_PRUNE:
                 with th.no_grad():
@@ -130,12 +130,43 @@ def resfit(target_mesh,
                 if Stats.get("pruned_obj") > cur_best_obj:
                     cur_best_program = best_running_program
                     cur_best_obj = Stats.get("pruned_obj")
+                    cur_best_recon_measure = Stats.get("pruned_recon_measure")
             else:
                 Stats.record("pruned_recon_measure", Stats.get("opt_recon_measure"))
                 Stats.record("pruned_n_prim", Stats.get("opt_n_prim"))
                 Stats.record("pruned_obj", Stats.get("opt_obj"))
             
-            cur_best_recon_measure = max(Stats.get("init_recon_measure"), Stats.get("opt_recon_measure"), Stats.get("pruned_recon_measure"))
+            if AlgConf.OPT_POST_PRUNE:
+                with Stats.timer("pp_opt"):
+                    measure_pack.target_sdf = target_sdf_opt
+                    measure_pack.reset()
+                    pp_running_program = optimize_primitive_assembly(running_program.tensor(dtype=AlgConf.OPT_DTYPE), 
+                                                        target_mesh, target_sdf_opt, optim_sketcher, measure_pack,
+                                                        post_prune=True)
+                Stats.record("pp_opt_program", pp_running_program.sympy().state(), log=False)
+                Stats.record("pp_opt_recon_measure", Stats.get("pp_optimization.end_recon_measure"))
+                Stats.record("pp_opt_n_prim", Stats.get("pp_optimization.end_n_prim"))
+                Stats.record("pp_opt_obj", Stats.get("pp_optimization.end_obj"))
+                if Stats.get("pp_opt_obj") > cur_best_obj:
+                    cur_best_program = pp_running_program
+                    running_program = pp_running_program
+                    cur_best_obj = Stats.get("pp_opt_obj")
+                    cur_best_recon_measure = Stats.get("pp_opt_recon_measure")
+                with Stats.timer("pp_prune"):
+                    pp_running_program = pp_running_program.tensor(dtype=prune_sketcher.dtype)
+                    measure_pack.target_sdf = target_sdf_prune
+                    measure_pack.reset()
+                    pp_best_running_program, pp_running_program = main_pruning_pipeline(pp_running_program, prune_sketcher, measure_pack, post_prune=True)
+                Stats.record("pp_pruned_program", pp_running_program.sympy().state(), log=False)
+                Stats.record("pp_pruned_recon_measure", Stats.get("pp_pruning.best_recon_measure"))
+                Stats.record("pp_pruned_n_prim", Stats.get("pp_pruning.best_n_prim"))
+                Stats.record("pp_pruned_obj", Stats.get("pp_pruning.best_obj"))
+                if Stats.get("pp_pruned_obj") > cur_best_obj:
+                    cur_best_program = pp_best_running_program
+                    running_program = pp_running_program
+                    cur_best_obj = Stats.get("pp_pruned_obj")
+                    cur_best_recon_measure = Stats.get("pp_pruned_recon_measure")
+            # THis is the main stopping criterion. 
             if cur_best_obj > best_obj + AlgConf.MPS_MIN_IMPROVEMENT:
                 best_iter = cur_iter
             if cur_best_obj >= best_obj:
@@ -166,8 +197,6 @@ def resfit(target_mesh,
             Stats.record("total_time", total_time)
             
             if save_file is not None:
-                if record_param:
-                    raise ValueError("Record param not supported")
                 cur_save_file = save_file.replace(".pkl", f"_{cur_iter}.pkl")
                 cPickle.dump(to_cpu_recursive(Stats.get_dict()), open(cur_save_file, "wb"))
                 logger.info(f"Saved to {cur_save_file}")
@@ -187,7 +216,7 @@ def resfit(target_mesh,
             else:
                 break
 
-        if early_stop and cur_iter - best_iter >= AlgConf.EARLY_STOP_ITER:
+        if AlgConf.EARLY_STOP and cur_iter - best_iter >= AlgConf.EARLY_STOP_ITER:
             logger.info(f"Early stopping at iteration {cur_iter} as no improvement")
             logger.info(f"Previous best iter: {best_iter}")
             
@@ -203,7 +232,8 @@ def resfit(target_mesh,
             else:
                 break
         else:
-            logger.debug("Did not reach early stop condition")
+            logger.info("Did not reach early stop condition")
+            logger.info("cur_iter: {cur_iter}, best_iter: {best_iter}")
         if AlgConf.RUN_LAST_OPT and last_run:
             logger.info("==================== Finished running last optimization ====================")
             break

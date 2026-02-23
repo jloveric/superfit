@@ -1,9 +1,53 @@
 import torch as th
 import superfit.symbolic as sps
 import geolipi.symbolic as gls
+from sysl.torch_compute.mat_combinators import sdf_geom_only_smooth_union, sdf_smooth_union
 from ..primitive_registry import PrimitiveHandler, register_handler
-from .utils import process_param_to_var, process_var_to_param, su_param_to_var, su_var_to_param
-from ...torch_compute.batched_primitives import batched_sf_packed_stochastic_eval
+from .utils import (
+    build_transform_constants,
+    make_packed_param_to_var,
+    make_packed_var_to_param,
+    make_param_to_var_dispatcher,
+    make_var_to_param_dispatcher,
+    make_param_from_variables_fast,
+)
+from ...torch_compute.batched_sf import (sample_gumbel, batched_sf_packed_eval,
+                                                batched_sf_packed_stochastic_eval,
+                                                batched_varaxis_sf_packed_stochastic_eval, 
+                                                batched_solid_sf_packed_stochastic_eval)
+from ...torch_compute.compile_friendly import _sdf_smooth_union_pair
+from sysl.torch_compute.mat_combinators import mix, EPSILON
+from ...utils.config import AlgorithmConfig as AlgConf
+from ..losses import get_param_loss_sf
+
+
+# Packed layout -- first 11 dims transformed, rest pass-through.
+#   [0:3] translate | [3:6] size | [6:7] roundness | [7:8] dilate | [8:9] taper | [9:10] bulge | [10:11] onion
+#   SF (14): [11:14] rotation | VarAxis (17): + [14:17] logits | SolidSF (18): + [14:18] logits
+_SF_TC = build_transform_constants([
+    gls.Translate3D, gls.Translate3D, gls.Translate3D,
+    "sp_size", "sp_size", "sp_size",
+    "sp_roundness", "sp_dilate_3d", "sp_taper", "sp_bulge", "sp_onion_ratio",
+])
+sf_packed_param_to_var = make_packed_param_to_var(_SF_TC)
+sf_packed_var_to_param = make_packed_var_to_param(_SF_TC)
+param_to_var_sf = make_param_to_var_dispatcher(sf_packed_param_to_var)
+var_to_param_sf = make_var_to_param_dispatcher(sf_packed_var_to_param)
+_params_from_variables_fast_sf = make_param_from_variables_fast(sf_packed_var_to_param)
+param_to_var_ext_sf = make_param_to_var_dispatcher(sf_packed_param_to_var)
+var_to_param_ext_sf = make_var_to_param_dispatcher(sf_packed_var_to_param)
+_ext_sf_param_from_variables_fast = make_param_from_variables_fast(sf_packed_var_to_param)
+
+PARAM_IND_TO_NAME = {
+    0: "sp_size",
+    1: "sp_roundness",
+    2: "sp_dilate_3d",
+    3: "sp_taper",
+    4: "sp_bulge",
+    5: "sp_onion_ratio",
+}
+
+
 # Unpack
 def unpack_params_sf(params):
     assert params.shape[-1] == 8
@@ -15,104 +59,111 @@ def unpack_params_sf(params):
     onion_ratio = params[..., 7:8]
     return size, roundness, dilate_3d, scale, bulge_ratio, onion_ratio
 
-# Param<->var functions
-def split_sf_packed(param):
-    param_0 = param[..., :3]
-    param_1 = param[..., 3:6]
-    param_2 = param[..., 6:9]
-    param_3 = param[..., 9:10]
-    param_4 = param[..., 10:11]
-    param_5 = param[..., 11:12]
-    param_6 = param[..., 12:13]
-    param_7 = param[..., 13:14]
-    return param_0, param_1, param_2, param_3, param_4, param_5, param_6, param_7
+# Custom function for param match:
 
-def sf_packed_param_to_var(param: th.Tensor) -> th.Tensor:
-    """
-    param -> variable  (inverse squash)
-    Uses algebraic-tanh inverse:
-        p_unit = (1-eps) * v / sqrt(1 + v^2)
-        => v = pu / sqrt(1 - pu^2), with tiny safety.
-    """
-    p0, p1, p2, p3, p4, p5, p6, p7 = split_sf_packed(param)
+def point2prim_hard(coords, all_params):
+    # B, N
+    params, su_vals, logits, temperature = all_params 
+    outputs = batched_sf_packed_eval(coords, params)
+    g = sample_gumbel(logits.shape, device=logits.device, dtype=logits.dtype)
+    w  = th.softmax((logits + g) / temperature, dim=-1)  # (..., 2)
 
-    sym_list   = [gls.Translate3D, "sp_size", "sp_roundness", "sp_dilate_3d", "sp_scale_opp", "sp_bulge", "sp_onion_ratio"]
-    param_list = [p0,              p2,         p3,              p4,              p5,              p6,              p7]
+    # Unpack weights explicitly
+    w0 = w[:, 0:1]
+    w1 = w[:, 1:2]
+
+    # Equivalent to weighted sum of [outputs, 1.0]
+    primitive_sdfs = outputs * w0 + w1
+
+    K = primitive_sdfs.shape[0]
+
+    prim_with_ids = []
+    for i in range(K):
+        ind_field = th.zeros_like(primitive_sdfs[i]) + i
+        updated_prim = th.stack([primitive_sdfs[i], ind_field], dim=-1)
+        prim_with_ids.append(updated_prim)
+
+    out = prim_with_ids[0]
+    for i in range(1, K):
+        k_reshaped = su_vals[i-1].unsqueeze(-1)
+        out = sdf_geom_only_smooth_union(out, prim_with_ids[i], k_reshaped)
     
-    v_list = process_param_to_var(sym_list, param_list)
+    return out
 
-    v0, v2, v3, v4, v5, v6, v7 = v_list
-    v1 = p1.detach().clone()                            # pass-through (non-optim)
-    # Concatenate and return a LEAF tensor for the optimizer
-    vcat = th.cat([v0, v1, v2, v3, v4, v5, v6, v7], dim=-1)
-    vcat = vcat.detach().requires_grad_(True)
-    return vcat
 
-def sf_packed_var_to_param(variable: th.Tensor) -> th.Tensor:
-    """
-    variable -> param  (forward squash)
-    Algebraic-tanh squash with margin:
-        p_unit = (1-eps) * v / sqrt(1 + v^2)
-        param  = p_unit * scale + offset
-    """
-    v0, v1, v2, v3, v4, v5, v6, v7 = split_sf_packed(variable)
+def point2prim_soft_distance(coords, all_params):
+    # B, N
+    params, su_vals, logits, temperature = all_params 
+    outputs = batched_sf_packed_eval(coords, params)
+    g = sample_gumbel(logits.shape, device=logits.device, dtype=logits.dtype)
+    w  = th.softmax((logits + g) / temperature, dim=-1)  # (..., 2)
 
-    sym_list = [gls.Translate3D, "sp_size", "sp_roundness", "sp_dilate_3d", "sp_scale_opp", "sp_bulge", "sp_onion_ratio"]
-    v_parts  = [v0,              v2,         v3,              v4,              v5,              v6,              v7]
-    p_list = process_var_to_param(sym_list, v_parts)
+    # Unpack weights explicitly
+    w0 = w[..., 0:1]
+    w1 = w[..., 1:2]
 
-    p0, p2, p3, p4, p5, p6, p7 = p_list
-    p1 = v1  # pass-through
+    # Equivalent to weighted sum of [outputs, 1.0]
+    primitive_sdfs = outputs * w0 + w1
 
-    return th.cat([p0, p1, p2, p3, p4, p5, p6, p7], dim=-1)
+    # Shape: B, N
+    tau = temperature ** 2.0
+    K = primitive_sdfs.shape[0]
+    # Do a distance based point association:
+    logits = -primitive_sdfs.T / tau
+    logits = logits - logits.max(dim=-1, keepdim=True).values  # stability
+    probs = th.softmax(logits, dim=-1)
 
-def param_to_var_sf(param: th.Tensor, local_ind: int) -> th.Tensor:
+    out = primitive_sdfs[0]
+    for i in range(1, K):
+        k_reshaped = su_vals[i-1].unsqueeze(-1)
+        out = _sdf_smooth_union_pair(out, primitive_sdfs[i], k_reshaped)
 
-    if local_ind == 0:
-        variable = sf_packed_param_to_var(param)
-    elif local_ind == 1:
-        variable = su_param_to_var(param)
-    elif local_ind == 2:
-        variable = th.autograd.Variable(param, requires_grad=True)
-    else:
-        raise ValueError(f"Unsupported local index: {local_ind}")
-    return variable
+    return probs, out
 
-def var_to_param_sf(variable: th.Tensor, local_ind: int) -> th.Tensor:
-    if local_ind == 0:
-        param = sf_packed_var_to_param(variable)
-    elif local_ind == 1:
-        param = su_var_to_param(variable)
-    elif local_ind == 2:
-        param = variable
-    else:
-        raise ValueError(f"Unsupported local index: {local_ind}")
-    return param
-### Handlers
 
-def _params_from_variables_fast_sf(tensor_list):
-    # TODO: write a faster version...
-    param_list = []
-    variable = tensor_list[0]
-    param = sf_packed_var_to_param(variable)
-    param_list.append(param)
-    variable = tensor_list[1]
-    mul, extra = 0.25, 0.25
-    param = th.tanh(variable) * mul + extra
-    param_list.append(param)
-    variable = tensor_list[2]
-    param = variable
-    param_list.append(param)
-    return param_list
+def point2prim_soft_smu(coords, all_params, smu_k=0.01, scale_factor=1.0):
+    # B, N
+    params, su_vals, logits, temperature = all_params 
+    outputs = batched_sf_packed_eval(coords, params)
+    g = sample_gumbel(logits.shape, device=logits.device, dtype=logits.dtype)
+    w  = th.softmax((logits + g) / temperature, dim=-1)  # (..., 2)
 
-PARAM_IND_TO_NAME = {
-    0: "sp_size",
-    1: "sp_roundness",
-    2: "sp_dilate_3d",
-    3: "sp_scale_opp",
-    4: "sp_bulge",
-    5: "sp_onion_ratio",
-}
+    # Unpack weights explicitly
+    w0 = w[..., 0:1]
+    w1 = w[..., 1:2]
+
+    # Equivalent to weighted sum of [outputs, 1.0]
+    primitive_sdfs = outputs * w0 + w1
+
+    # Shape: B, N
+    # tau = temperature ** 2.0
+    K = primitive_sdfs.shape[0]
+    # Do a distance based point association:
+    # probs = th.softmax(logits, dim=-1)
+
+    out = primitive_sdfs[0]
+    empty_distr = th.zeros((primitive_sdfs.shape[1], K+1)).to(primitive_sdfs.device).float()
+    # Add the last one
+    cur_distr = empty_distr.clone()
+    cur_distr[:, 0] = 1.0
+    for i in range(1, K):
+        k_reshaped = su_vals[i-1].unsqueeze(-1)
+        var_a, var_b = out, primitive_sdfs[i]
+        h = th.clamp(0.5 + 0.5 * (var_b - var_a) / (k_reshaped + EPSILON), min=0.0, max=1.0)
+        out = mix(var_b, var_a, h) - k_reshaped * h * (1.0 - h);
+
+        h_2 = th.clamp(0.5 + 0.5 * (var_b- var_a) / (smu_k + EPSILON), min=0.0, max=1.0)
+        h_2 = h_2.squeeze().unsqueeze(-1)
+        new_distr = empty_distr.clone()
+        new_distr[:, i] = 1.0
+        # out = _sdf_smooth_union_pair(out, primitive_sdfs[i], k_reshaped)
+        cur_distr = mix(new_distr, cur_distr, h_2)
+    
+    output_tanh = th.tanh(out * scale_factor)
+    output_for_occ_occ = th.sigmoid(-output_tanh * scale_factor)
+    cur_distr[:, -1] = 1.0 - output_for_occ_occ * 1.0
+
+    return cur_distr, out
 
 @register_handler
 class SFHandler(PrimitiveHandler):
@@ -129,7 +180,88 @@ class SFHandler(PrimitiveHandler):
     var_to_param = var_to_param_sf
     param_from_variables_fast = _params_from_variables_fast_sf
     batched_eval_function = batched_sf_packed_stochastic_eval
-    
+    point2prim_hard = point2prim_hard
+    point2prim_soft = point2prim_soft_smu
     PARAM_IND_TO_NAME = PARAM_IND_TO_NAME
+    get_param_loss = get_param_loss_sf
+
+def unpack_params_solid_sf(params):
+    assert params.shape[-1] == 12
+    sf_params = unpack_params_sf(params[..., :8])
+    logits = params[..., 8:12]
+    return sf_params + (logits,)
+
+def unpack_params_var_axis_sf(params):
+    assert params.shape[-1] == 11
+    sf_params = unpack_params_sf(params[..., :8])
+    logits = params[..., 8:11]
+    return sf_params + (logits,)
 
 
+# Reinit helpers
+
+def reinit_params_solid_sf(prim_expr, prim_param):
+    if isinstance(prim_expr, sps.SolidSF):
+        log_reinit_param = []
+    else:
+        raise ValueError(f"Unsupported primitive type: {prim_expr}")
+    return log_reinit_param
+
+def reinit_params_varaxis_sf(prim_expr, prim_param):
+    val = AlgConf.DEFAULT_LOGITS_RESTART_VALUES[0]
+    if isinstance(prim_expr, sps.SuperFrustumY):
+        log_reinit = (val, -val, -val)
+        log_reinit_param = [th.Tensor(log_reinit).to(prim_param.device),]
+    elif isinstance(prim_expr, sps.SuperFrustumZ):
+        log_reinit = (-val, val, -val)
+        log_reinit_param = [th.Tensor(log_reinit).to(prim_param.device),]
+    elif isinstance(prim_expr, sps.SuperFrustumX):
+        log_reinit = (-val, -val, val)
+        log_reinit_param = [th.Tensor(log_reinit).to(prim_param.device),]
+    elif isinstance(prim_expr, sps.VarAxisSF):
+        log_reinit_param = []
+    else:
+        raise ValueError(f"Unsupported primitive type: {prim_expr}")
+    return log_reinit_param
+
+
+
+@register_handler
+class VarAxisSFHandler(PrimitiveHandler):
+    base_class = sps.VarAxisSF
+    packed_class = sps.VarAxisSFPacked
+    packed_batched_class = sps.VarAxisSFPackedBatched
+    packed_batched_stochastic_class = sps.VarAxisSFPackedBatchedStochastic
+    packed_batched_su_class = sps.VarAxisSFPackedBatchedSU
+    packed_batched_stochastic_su_class = sps.VarAxisSFPackedBatchedStochasticSU
+    batched_param_size = 17
+    unpack_params = unpack_params_var_axis_sf
+    param_to_var = param_to_var_ext_sf
+    var_to_param = var_to_param_ext_sf
+    param_from_variables_fast = _ext_sf_param_from_variables_fast
+    batched_eval_function = batched_varaxis_sf_packed_stochastic_eval
+    point2prim_hard = None
+    point2prim_soft = None
+    reinit_params = reinit_params_varaxis_sf
+    get_param_loss = get_param_loss_sf
+
+
+
+@register_handler
+class SolidSFHandler(PrimitiveHandler):
+    base_class = sps.SolidSF
+    packed_class = sps.SolidSFPacked
+    packed_batched_class = sps.SolidSFPackedBatched
+    packed_batched_stochastic_class = sps.SolidSFPackedBatchedStochastic
+    packed_batched_su_class = sps.SolidSFPackedBatchedSU
+    packed_batched_stochastic_su_class = sps.SolidSFPackedBatchedStochasticSU
+    batched_param_size = 18
+    unpack_params = unpack_params_solid_sf
+    param_to_var = param_to_var_ext_sf
+    var_to_param = var_to_param_ext_sf
+    param_from_variables_fast = _ext_sf_param_from_variables_fast
+    batched_eval_function = batched_solid_sf_packed_stochastic_eval
+    point2prim_hard = None
+    point2prim_soft = None
+    reinit_params = reinit_params_solid_sf
+    get_param_loss = get_param_loss_sf

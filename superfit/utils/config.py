@@ -23,19 +23,20 @@ class AlgorithmConfig:
     # SKETCHER:
     DATA_RESOLUTION: int = 256
 
-    MPS_MAX_ITER: int = 5
+    MPS_MAX_ITER: int = 10
     MPS_LEN_WEIGHT: float = -1e-3
-    DATA_DECIMATION: float = 0.5
     MPS_STOP_IOU: float = 0.99
 
-    # DECOMPOSE:
+    # DECOMPOSE: - 
+    # HACK: Set with main_setting as dicts are not supported at Init. 
     DECOMPOSE_SIZE_LIMIT = None
     DECOMPOSE_MODE: str = None
     DECOMPOSE_CONFIG: Dict[str, Any] = None
 
 
     MIN_VOLUME_LIMIT_FOR_REINIT: float = 2e-5
-    CLEANUP_V1: bool = True
+    
+    EARLY_STOP: bool = True
     EARLY_STOP_ITER: int = 1
 
     # OPTIM
@@ -55,7 +56,6 @@ class AlgorithmConfig:
     OPT_STOPPING_IOU: float = 0.99
     MAX_ITER: int = 1000
     STOCHASTIC_PRECONDITION_INIT_VAL: float = 2 * np.sqrt(3) * 0.01
-    STOCHASTIC_PRECONDITION_INIT_VAL_LOWER: float = 2 * np.sqrt(3) * 0.01
 
     # OTHER:
     TARGET_MODE: str = "dilated"
@@ -79,14 +79,16 @@ class AlgorithmConfig:
     LOSS_PARAM_REGULARIZATION_ALPHA: float = 1e-8
     LOSS_PCOUNT_PHASIC: bool = False
     LOSS_PQUAL_PHASIC: bool = False
+    SURFACE_ADJ_SDF_LOSS: bool = False
+    LOSS_SURFACE_ADJ_SDF_ALPHA: float = 0.2
 
     SEMANTIC_LOSS: bool = False
     LOSS_SEMANTIC_PR_TO_PO_ALPHA: float = 10.0
     LOSS_SEMANTIC_PR_TO_PR_ALPHA: float = 1.0
 
     TVERSKY_MODE: bool = False
-    TVERSKY_ALPHA: float = 2.0
-    TVERSKY_BETA: float = 1.0
+    TVERSKY_ALPHA: float = 1.0
+    TVERSKY_BETA: float = 0.0
 
     OPT_HACK_GRAD = False
     GRAD_LOWER_RATE_V2 = 0.001
@@ -114,7 +116,7 @@ class AlgorithmConfig:
     # PRIM_TYPE: str = "VarAxisSF"
     SMOOTHEN: bool = True
     CUBOID_MODE: bool = False
-    NEO_SMPL_MODE: bool = False
+    OLD_SMPL_MODE: bool = False
     FREEZE_PREV_PRIMS: bool = False
     
     OPT_DTYPE: str = th.float32
@@ -136,8 +138,21 @@ class AlgorithmConfig:
     RENDER_ITER: int = 5
     
     # Ablations:
-    LOWER_SP: bool = False
     BIDIR: bool = False
+    BIDIR_RESOLUTION: int = 128
+    BIDIR_SAMPLE_RATIO: float = 0.75
+    PERTURB_LOSS_LAMBDA_INIT_VAL: float = 1.0
+    PERTURB_LOSS_LAMBDA: bool = False
+    OPT_POST_PRUNE: bool = False
+    EXISTENCE_LR_MULTIPLIER: float = 5.0
+    REFLECTION_LOSS: bool = False
+    REFLECTION_LOSS_ALPHA: float = 1.0
+    SEMANTIC_LOSS: bool = False
+    SEMANTIC_LOSS_ALPHA: float = 1.0
+    SEMANTIC_LOSS_BAND: float = 0.01
+
+    LOWER_SP: bool = False
+    STOCHASTIC_PRECONDITION_INIT_VAL_LOWER: float = 2 * np.sqrt(3) * 0.01
     
     @staticmethod
     def save_to_file(file_path):
@@ -167,34 +182,6 @@ class AlgorithmConfig:
 
     
 def main_setting():
-
-    AlgorithmConfig.RENEW_PTS_ITER: int = 100
-    AlgorithmConfig.N_SURFACE_POINTS: int = 100_000
-    AlgorithmConfig.TARGET_MODE: str = "dilated"
-    # AlgorithmConfig.TARGET_MODE: str = None
-    AlgorithmConfig.TARGET_MODE_DILATION: float = 0.15
-    AlgorithmConfig.OPT_RESOLUTION: int = 48
-
-
-    AlgorithmConfig.N_ITERS: int = 400
-    AlgorithmConfig.SAT_PATIENCE: int = 100
-    AlgorithmConfig.MAX_ITER: int = 1000
-    AlgorithmConfig.OPT_LR_RATE: float = 0.01
-
-    AlgorithmConfig.USE_CURVATURE_WEIGHTS = True
-    AlgorithmConfig.DO_PRUNE = True
-    AlgorithmConfig.OPT_HACK_GRAD = False
-    AlgorithmConfig.TVERSKY_MODE = False
-
-    # Next: With Quality and Length Losses. 
-    AlgorithmConfig.LOSS_PARAM_REGULARIZATION_ALPHA = 1e-8
-    AlgorithmConfig.STOCHASTIC_DROPOUT: bool = True
-    AlgorithmConfig.LOSS_PRIMITIVE_COUNT_ALPHA: float = 2e-3
-    AlgorithmConfig.LOSS_OVERLAP_ALPHA: float = 2e-2
-    AlgorithmConfig.LOSS_SHAPE_UNOVERLAP_ALPHA: float = 2e-2
-
-
-    AlgorithmConfig.MPS_MAX_ITER = 10
     AlgorithmConfig.DECOMPOSE_MODE = "MSD_NEW"
     AlgorithmConfig.DECOMPOSE_SIZE_LIMIT = 20
     AlgorithmConfig.DECOMPOSE_CONFIG = {
@@ -218,17 +205,39 @@ def low_cost_mode_v2():
     AlgorithmConfig.MAX_ITER: int = 1000
     AlgorithmConfig.OPT_LR_RATE: float = 0.01
 
-def medium_cost_mode():
+def cvpr_submission_settings():
+    AlgorithmConfig.MPS_MAX_ITER = 10
+    AlgorithmConfig.DECOMPOSE_MODE = "MSD_NEW"
+    AlgorithmConfig.DECOMPOSE_SIZE_LIMIT = 20
+    AlgorithmConfig.DECOMPOSE_CONFIG = {
+        "min_eroded_part_size_ratio": 0.005,
+        "min_part_size_ratio": 0.001,
+        "concavity_threshold": 0.15,
+        "size_limit": 20,
+        "max_mps_iter": 7,
+    }
     AlgorithmConfig.RENEW_PTS_ITER: int = 100
     AlgorithmConfig.N_SURFACE_POINTS: int = 100_000
     AlgorithmConfig.TARGET_MODE: str = "dilated"
-    AlgorithmConfig.TARGET_MODE_DILATION: float = 0.15
-    AlgorithmConfig.OPT_RESOLUTION: int = 128
+    AlgorithmConfig.TARGET_MODE_DILATION: float = 0.2
+    AlgorithmConfig.OPT_RESOLUTION: int = 64
 
     AlgorithmConfig.N_ITERS: int = 400
     AlgorithmConfig.SAT_PATIENCE: int = 100
     AlgorithmConfig.MAX_ITER: int = 1600
     AlgorithmConfig.OPT_LR_RATE: float = 0.01
+
+    AlgorithmConfig.USE_CURVATURE_WEIGHTS = True
+    AlgorithmConfig.OPT_HACK_GRAD = False
+    AlgorithmConfig.TVERSKY_MODE = False
+    AlgorithmConfig.DO_PRUNE = True
+
+    # Next: With Quality and Length Losses. 
+    AlgorithmConfig.LOSS_PARAM_REGULARIZATION_ALPHA = 1e-8
+    AlgorithmConfig.STOCHASTIC_DROPOUT: bool = True
+    AlgorithmConfig.LOSS_PRIMITIVE_COUNT_ALPHA: float = 2e-3
+    AlgorithmConfig.LOSS_OVERLAP_ALPHA: float = 2e-2
+    AlgorithmConfig.LOSS_SHAPE_UNOVERLAP_ALPHA: float = 2e-2
 
 
 def high_cost_mode():
@@ -242,6 +251,27 @@ def high_cost_mode():
     AlgorithmConfig.SAT_PATIENCE: int = 150
     AlgorithmConfig.MAX_ITER: int = 2500
 
+def perturb_loss_lambda():
+    AlgorithmConfig.PERTURB_LOSS_LAMBDA = True
+    AlgorithmConfig.PERTURB_LOSS_LAMBDA_INIT_VAL = 1.0
+    AlgorithmConfig.REAL_LOSS_OCC_ALPHA = AlgorithmConfig.LOSS_OCC_ALPHA
+    AlgorithmConfig.REAL_LOSS_SURFACE_ADJ_OCC_ALPHA = AlgorithmConfig.LOSS_SURFACE_ADJ_OCC_ALPHA
+    AlgorithmConfig.REAL_LOSS_SURFACE_SDF_ALPHA = AlgorithmConfig.LOSS_SURFACE_SDF_ALPHA
+    AlgorithmConfig.REAL_LOSS_PRIMITIVE_COUNT_ALPHA = AlgorithmConfig.LOSS_PRIMITIVE_COUNT_ALPHA
+    AlgorithmConfig.REAL_LOSS_PARAM_REGULARIZATION_ALPHA = AlgorithmConfig.LOSS_PARAM_REGULARIZATION_ALPHA
+    AlgorithmConfig.REAL_LOSS_OVERLAP_ALPHA = AlgorithmConfig.LOSS_OVERLAP_ALPHA
+    AlgorithmConfig.REAL_LOSS_SHAPE_UNOVERLAP_ALPHA = AlgorithmConfig.LOSS_SHAPE_UNOVERLAP_ALPHA
+
+def new_loss_lambda():
+    AlgorithmConfig.SURFACE_ADJ_PERTURBATION_SCALE: float = 0.05 # 0.05
+    AlgorithmConfig.LOSS_OCC_ALPHA: float = 1.0
+    AlgorithmConfig.LOSS_SURFACE_ADJ_OCC_ALPHA: float = 2.0
+    AlgorithmConfig.LOSS_SURFACE_SDF_ALPHA: float = 0.5
+    AlgorithmConfig.STOCHASTIC_DROPOUT: bool = True
+    AlgorithmConfig.LOSS_PRIMITIVE_COUNT_ALPHA: float = 2e-3
+    AlgorithmConfig.LOSS_OVERLAP_ALPHA: float = 5e-2
+    AlgorithmConfig.LOSS_SHAPE_UNOVERLAP_ALPHA: float = 5e-2
+    AlgorithmConfig.LOSS_PARAM_REGULARIZATION_ALPHA: float = 1e-5
 
 def initialize_seeds(seed: int = None, use_deterministic: bool = None):
     """
@@ -303,15 +333,159 @@ def reset_eval_seeds(seed: int = None):
         th.cuda.manual_seed(seed)
         th.cuda.manual_seed_all(seed)
     
-    # Open3D random (if available)
-    try:
-        import open3d as o3d
-        o3d.utility.random.seed(seed)
-    except ImportError:
-        pass
-    
     return seed
 
-def check_config():
-    if AlgorithmConfig.FastMode:
-        assert AlgorithmConfig.PRIM_TYPE in ["SuperFrustum", "VarAxisSF"]
+def set_config_ablation(ablation: int, fastmode: bool = True):
+    """
+    Apply ablation-specific config overrides on top of main_setting().
+
+    Args:
+        ablation: Ablation number (0 = baseline, no extra overrides).
+        fastmode: If False, disables FastMode and TorchCompile.
+    """
+    if not fastmode:
+        AlgorithmConfig.FastMode = False
+        AlgorithmConfig.TorchCompile = False
+
+    if ablation == 0:
+        pass
+    elif ablation == 1:
+        AlgorithmConfig.BIDIR = True
+    elif ablation == 2:
+        AlgorithmConfig.PRIM_TYPE = "VarAxisSF"
+        AlgorithmConfig.BIDIR = True
+    elif ablation == 3:
+        AlgorithmConfig.MPS_LEN_WEIGHT = -5e-3
+        AlgorithmConfig.LOSS_PRIMITIVE_COUNT_ALPHA = 5e-3
+        AlgorithmConfig.LOSS_OVERLAP_ALPHA = 5e-2
+        AlgorithmConfig.LOSS_SHAPE_UNOVERLAP_ALPHA = 5e-2
+    elif ablation == 4:
+        AlgorithmConfig.MPS_LEN_WEIGHT = -1e-2
+        AlgorithmConfig.LOSS_PRIMITIVE_COUNT_ALPHA = 1e-2
+        AlgorithmConfig.LOSS_OVERLAP_ALPHA = 1e-1
+        AlgorithmConfig.LOSS_SHAPE_UNOVERLAP_ALPHA = 1e-1
+    elif ablation == 5:
+        AlgorithmConfig.MPS_LEN_WEIGHT = -1e-3
+        AlgorithmConfig.LOSS_PRIMITIVE_COUNT_ALPHA = 1e-2
+        AlgorithmConfig.LOSS_OVERLAP_ALPHA = 1e-1
+        AlgorithmConfig.LOSS_SHAPE_UNOVERLAP_ALPHA = 1e-1
+    elif ablation == 6:
+        AlgorithmConfig.MPS_LEN_WEIGHT = -1e-3
+        AlgorithmConfig.LOSS_PRIMITIVE_COUNT_ALPHA = 1e-2
+        AlgorithmConfig.LOSS_OVERLAP_ALPHA = 1e-1
+        AlgorithmConfig.LOSS_SHAPE_UNOVERLAP_ALPHA = 1e-1
+        AlgorithmConfig.SMOOTHEN = False
+    elif ablation == 8:
+        perturb_loss_lambda()
+    elif ablation == 9:
+        AlgorithmConfig.OPT_POST_PRUNE = True
+    elif ablation == 10:
+        AlgorithmConfig.REFLECTION_LOSS = True
+        AlgorithmConfig.REFLECTION_LOSS_ALPHA = 2.0
+    elif ablation == 92:
+        AlgorithmConfig.SEMANTIC_LOSS = True
+        AlgorithmConfig.SEMANTIC_LOSS_ALPHA = 1.0
+    elif ablation == 93:
+        AlgorithmConfig.EARLY_STOP = False
+        perturb_loss_lambda()
+        AlgorithmConfig.PRIM_TYPE = "VarAxisSF"
+        AlgorithmConfig.OPT_POST_PRUNE = True
+        AlgorithmConfig.BIDIR = True
+        AlgorithmConfig.DECOMPOSE_CONFIG = {
+            "min_eroded_part_size_ratio": 0.005,
+            "min_part_size_ratio": 0.0001,
+            "size_limit": 20,
+            "max_msd_iter": 7,
+        }
+        AlgorithmConfig.OPT_RESOLUTION = 128
+        AlgorithmConfig.MPS_LEN_WEIGHT = -5e-3
+        AlgorithmConfig.LOSS_PRIMITIVE_COUNT_ALPHA = 1e-2
+        AlgorithmConfig.LOSS_OVERLAP_ALPHA = 5e-2
+        AlgorithmConfig.LOSS_SHAPE_UNOVERLAP_ALPHA = 5e-2
+    elif ablation == 94:
+        AlgorithmConfig.PRIM_TYPE = "VarAxisSF"
+        AlgorithmConfig.OPT_POST_PRUNE = True
+        AlgorithmConfig.BIDIR = True
+    elif ablation == 95:
+        AlgorithmConfig.EARLY_STOP = False
+        perturb_loss_lambda()
+        AlgorithmConfig.PRIM_TYPE = "VarAxisSF"
+        AlgorithmConfig.OPT_POST_PRUNE = True
+        AlgorithmConfig.BIDIR = True
+        AlgorithmConfig.DECOMPOSE_CONFIG = {
+            "min_eroded_part_size_ratio": 0.005,
+            "min_part_size_ratio": 0.0001,
+            "size_limit": 20,
+            "max_msd_iter": 7,
+        }
+    elif ablation == 96:
+        AlgorithmConfig.EARLY_STOP = False
+        AlgorithmConfig.PRIM_TYPE = "VarAxisSF"
+        AlgorithmConfig.OPT_POST_PRUNE = True
+        AlgorithmConfig.BIDIR = True
+    elif ablation == 97:
+        AlgorithmConfig.EARLY_STOP = False
+        AlgorithmConfig.PRIM_TYPE = "VarAxisSF"
+        AlgorithmConfig.OPT_POST_PRUNE = True
+        AlgorithmConfig.BIDIR = True
+        AlgorithmConfig.MPS_LEN_WEIGHT = -5e-3
+        AlgorithmConfig.LOSS_PRIMITIVE_COUNT_ALPHA = 1e-2
+        AlgorithmConfig.LOSS_OVERLAP_ALPHA = 1e-1
+        AlgorithmConfig.LOSS_SHAPE_UNOVERLAP_ALPHA = 1e-1
+        AlgorithmConfig.DECOMPOSE_CONFIG = {
+            "min_eroded_part_size_ratio": 0.005,
+            "min_part_size_ratio": 0.0001,
+            "size_limit": 20,
+            "max_msd_iter": 10,
+        }
+    elif ablation == 98:
+        AlgorithmConfig.PRIM_TYPE = "VarAxisSF"
+        AlgorithmConfig.OPT_POST_PRUNE = True
+        AlgorithmConfig.BIDIR = True
+        AlgorithmConfig.MPS_LEN_WEIGHT = -5e-3
+        AlgorithmConfig.LOSS_PRIMITIVE_COUNT_ALPHA = 1e-2
+        AlgorithmConfig.LOSS_OVERLAP_ALPHA = 1e-1
+        AlgorithmConfig.LOSS_SHAPE_UNOVERLAP_ALPHA = 1e-1
+        AlgorithmConfig.DECOMPOSE_CONFIG = {
+            "min_eroded_part_size_ratio": 0.005,
+            "min_part_size_ratio": 0.0001,
+            "size_limit": 20,
+            "max_msd_iter": 10,
+        }
+    elif ablation == 99:
+        AlgorithmConfig.OPT_POST_PRUNE = True
+        AlgorithmConfig.BIDIR = True
+        AlgorithmConfig.MPS_LEN_WEIGHT = -1e-3
+        AlgorithmConfig.LOSS_PRIMITIVE_COUNT_ALPHA = 5e-3
+        AlgorithmConfig.LOSS_OVERLAP_ALPHA = 1e-1
+        AlgorithmConfig.LOSS_SHAPE_UNOVERLAP_ALPHA = 1e-1
+    elif ablation == 11:
+        AlgorithmConfig.PRIM_TYPE = "VarAxisSPP"
+        AlgorithmConfig.BIDIR = True
+    elif ablation == 12:
+        AlgorithmConfig.PRIM_TYPE = "VarAxisSG"
+        # AlgorithmConfig.OPT_POST_PRUNE = True
+        AlgorithmConfig.BIDIR = True
+    elif ablation == 13:
+        AlgorithmConfig.SEMANTIC_LOSS = True
+        AlgorithmConfig.SEMANTIC_LOSS_ALPHA = 2.0
+    elif ablation == 14:
+        AlgorithmConfig.PRIM_TYPE = "VarAxisSPP"
+        AlgorithmConfig.BIDIR = True
+        new_loss_lambda()
+    elif ablation == 15:
+        AlgorithmConfig.PRIM_TYPE = "VarAxisSF"
+        AlgorithmConfig.BIDIR = True
+        new_loss_lambda()
+    elif ablation == 16:
+        cvpr_submission_settings()
+    elif ablation == 17:
+        AlgorithmConfig.PRIM_TYPE = "VarAxisSF"
+        AlgorithmConfig.BIDIR = True
+        new_loss_lambda()
+        AlgorithmConfig.TVERSKY_MODE = False
+        AlgorithmConfig.SURFACE_ADJ_SDF_LOSS: bool = True
+        AlgorithmConfig.LOSS_SURFACE_ADJ_SDF_ALPHA: float = 1.0
+        # Using Tversky loss. 
+        # Add CD+SurfaceIOU Metric
+

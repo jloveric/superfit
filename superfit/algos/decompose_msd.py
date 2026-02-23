@@ -8,7 +8,7 @@ from superfit.utils.mesh_sdf import renorm_target_sdf, clean_up_msd_with_opening
 from superfit.utils.logger import logger
 
 
-def msd_new(target_sdf, sketcher_3d, 
+def msd(target_sdf, sketcher_3d, 
             max_msd_iter=100,
             min_eroded_part_size_ratio=0.005, 
             min_part_size_ratio=0.001,

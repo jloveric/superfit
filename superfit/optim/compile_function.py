@@ -7,7 +7,7 @@ import geolipi.symbolic as gls
 from dataclasses import dataclass
 from typing import Callable, Any, List
 from geolipi.torch_compute.unroll_expression import unroll_expression
-from ..torch_compute.compile_friendly import batched_sf_packed_stochastic_eval, _sdf_smooth_union_pair, batched_sf_packed_stochastic_su_eval
+from ..torch_compute.compile_friendly import _sdf_smooth_union_pair
 from .losses import compute_total_loss
 from ..utils.config import AlgorithmConfig as AlgConf
 from ..utils.logger import logger
@@ -33,41 +33,52 @@ def compile_program_jit(in_program, sketcher, handler: PrimitiveHandler,
 
 @dataclass(slots=True)
 class CompiledOps:
-    compiled_assembly_execution: Callable[..., Any] = batched_sf_packed_stochastic_eval
-    compiled_loss_function: Callable[..., Any] = compute_total_loss
-    param_from_variables: Callable[..., Any] = params_from_variables
-
+    compiled_assembly_execution: Callable[..., Any] = None
+    compiled_loss_function: Callable[..., Any] = None
+    param_from_variables: Callable[..., Any] = None
+    point2prim_hard: Callable[..., Any] = None
+    point2prim_soft: Callable[..., Any] = None
 
 # Run a dummy Opt function. 
 def compile_cached_with_dummy_opt(in_program, sketcher,
-            handler: PrimitiveHandler, torch_compile=False, *args, **kwargs):
+            handler: PrimitiveHandler, torch_compile=True, *args, **kwargs):
 
-    forward_function = handler.batched_eval_function
 
     if AlgConf.COMPILED_FUNCTIONS is not None:
         compiled_ops = AlgConf.COMPILED_FUNCTIONS
         return compiled_ops
 
     if not torch_compile:
+
         def execute(coords, all_params):
-            output = forward_function(coords, *all_params)
-            return output
+            params, su_vals, logits, temperature = all_params 
+            output = handler.batched_eval_function(coords, params, logits, temperature)
+            K = output.shape[0]
+
+            out = output[0]
+            for i in range(1, K):
+                k_reshaped = su_vals[i-1].unsqueeze(-1)
+                out = _sdf_smooth_union_pair(out, output[i], k_reshaped)
+            return (output, out)
         compiled_ops = CompiledOps(
             compiled_assembly_execution=execute,
             compiled_loss_function=compute_total_loss,
-            param_from_variables=params_from_variables,
+            param_from_variables=handler.param_from_variables_fast,
+            point2prim_hard=handler.point2prim_hard,
+            point2prim_soft=handler.point2prim_soft,
         )
         return compiled_ops
 
 
-    comp_func = th.compile(forward_function, 
+    comp_func = th.compile(handler.batched_eval_function, 
         backend="inductor",
         # mode="max-autotune",
         mode="default",
         fullgraph=True,
         dynamic=True,
     )
-    # comp_func = forward_function
+    # comp_func = handler.batched_eval_function
+
     compiled_su_func = th.compile(_sdf_smooth_union_pair, 
         backend="inductor",
         # mode="max-autotune",
@@ -88,15 +99,33 @@ def compile_cached_with_dummy_opt(in_program, sketcher,
             out = compiled_su_func(out, output[i], k_reshaped)
         
         return (output, out)
-
-    compiled_loss_function = th.compile(compute_total_loss, 
+    def total_loss_with_params(output_shape_occ, hard_target_fl, 
+                 output_surface_adj_occ, hard_target_surface_adj_fl, 
+                 output_surface_sdf,
+                 primitive_sdfs, output_sdf, 
+                 mask_shape, mask_surface, mask_surface_adj,
+                 transformed_params, 
+                 scale_factor, curvature_weights):
+        loss_1 = compute_total_loss(output_shape_occ, hard_target_fl, 
+                 output_surface_adj_occ, hard_target_surface_adj_fl, 
+                 output_surface_sdf,
+                 primitive_sdfs, output_sdf, 
+                 mask_shape, mask_surface, mask_surface_adj,
+                 transformed_params, 
+                 scale_factor, curvature_weights)
+        loss_2 = handler.get_param_loss(transformed_params) 
+        total_loss = loss_1 + AlgConf.LOSS_PARAM_REGULARIZATION_ALPHA * loss_2
+        return total_loss
+        
+    compiled_loss_function = th.compile(total_loss_with_params, 
         backend="inductor",
         # mode="max-autotune",
         mode="default",
         fullgraph=True,
         dynamic=True,
     )
-    # compiled_loss_function = compute_total_loss
+    if AlgConf.PRIM_TYPE == "VarAxisSF":
+        compiled_loss_function = total_loss_with_params
 
     compiled_param_from_variables = th.compile(handler.param_from_variables_fast, 
         backend="inductor",
@@ -196,6 +225,8 @@ def compile_cached_with_dummy_opt(in_program, sketcher,
         compiled_assembly_execution=compiled_assembly_execution,
         compiled_loss_function=compiled_loss_function,
         param_from_variables=compiled_param_from_variables,
+        point2prim_hard=handler.point2prim_hard,
+        point2prim_soft=handler.point2prim_soft,
     )
     logger.info("Finished compiling with dummy opt")
     if AlgConf.SAVE_JIT_CACHE:

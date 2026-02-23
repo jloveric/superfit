@@ -2,7 +2,6 @@ import torch as th
 import numpy as np
 import cubvh
 import trimesh
-import open3d as o3d
 from ..utils.config import AlgorithmConfig as AlgConf, reset_eval_seeds
 
 def quick_sample_points(mesh, sketcher, n_points=10000):
@@ -172,38 +171,30 @@ def get_mask_scaled_aabb(points: th.Tensor,
 
 def sample_surface_proximal_points(mesh: trimesh.Trimesh, n_points=10000, jitter_sigma=0.0):
     """
-    Sample points uniformly near the surface of a mesh using Open3D.
+    Sample points uniformly near the surface of a mesh using trimesh.
 
     Args:
         mesh (trimesh.Trimesh): input mesh
         n_points (int): number of points to sample
         jitter_sigma (float): stddev of Gaussian noise to add along normals
-        seed (int): Random seed. If None, uses AlgorithmConfig.EVAL_SEED
 
     Returns:
         (N, 3) numpy array of sampled points
     """
-    reset_eval_seeds() # Open3D's internal RNG (added in 0.17+)
-    # Convert to Open3D format
-    o3d_mesh = o3d.geometry.TriangleMesh()
-    o3d_mesh.vertices = o3d.utility.Vector3dVector(mesh.vertices)
-    o3d_mesh.triangles = o3d.utility.Vector3iVector(mesh.faces)
-    o3d_mesh.compute_vertex_normals()
+    reset_eval_seeds()  # resets numpy/torch/python RNG for reproducibility
 
-    # Sample surface points
-    pcd = o3d_mesh.sample_points_uniformly(number_of_points=n_points)
-    points = np.asarray(pcd.points)
+    # Sample surface points and retrieve face indices
+    points, face_indices = trimesh.sample.sample_surface(mesh, n_points)
 
     if jitter_sigma > 0.0:
-        normals = np.asarray(pcd.normals)
+        normals = mesh.face_normals[face_indices]
         noise = np.random.uniform(-jitter_sigma, jitter_sigma, size=points.shape)
-        # noise = np.random.normal(scale=jitter_sigma, size=points.shape)
-        points += normals * noise
+        points = points + normals * noise
 
     return points
 
 
-def perform_batched_stochastic_precondition(base_coords, i, base_iters, init_val=AlgConf.STOCHASTIC_PRECONDITION_INIT_VAL_LOWER):
+def perform_batched_stochastic_precondition(base_coords, i, base_iters, init_val):
     final_val = 0
     frac = min(i / (base_iters), 1.0)
     alpha = init_val * (1 - frac) + final_val * frac
