@@ -28,6 +28,7 @@ DEFAULT_EDITING_SETTINGS = {
     "set_to_ubo": False,
     "set_param_to_texture": False,
 }
+
 def get_sfsp_editing_expr():
 
     primitive_expr = gls.SmoothUnion(

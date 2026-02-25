@@ -69,6 +69,7 @@ class AlgorithmConfig:
     # LOSS Weights:
     SKIP_SURFACE: str = False
     SURFACE_ADJ_PERTURBATION_SCALE: float = 0.05 # 0.05
+
     LOSS_OCC_ALPHA: float = 1.0
     LOSS_SURFACE_ADJ_OCC_ALPHA: float = 2.0
     LOSS_SURFACE_SDF_ALPHA: float = 0.2
@@ -79,8 +80,18 @@ class AlgorithmConfig:
     LOSS_PARAM_REGULARIZATION_ALPHA: float = 1e-8
     LOSS_PCOUNT_PHASIC: bool = False
     LOSS_PQUAL_PHASIC: bool = False
-    SURFACE_ADJ_SDF_LOSS: bool = False
+    LOSS_SURFACE_ADJ_SDF: bool = False
     LOSS_SURFACE_ADJ_SDF_ALPHA: float = 0.2
+
+    REAL_LOSS_OCC_ALPHA: float = LOSS_OCC_ALPHA
+    REAL_LOSS_SURFACE_ADJ_OCC_ALPHA: float = LOSS_SURFACE_ADJ_OCC_ALPHA
+    REAL_LOSS_SURFACE_SDF_ALPHA: float = LOSS_SURFACE_SDF_ALPHA
+    REAL_LOSS_PRIMITIVE_COUNT_ALPHA: float = LOSS_PRIMITIVE_COUNT_ALPHA
+    REAL_LOSS_PARAM_REGULARIZATION_ALPHA: float = LOSS_PARAM_REGULARIZATION_ALPHA
+    REAL_LOSS_OVERLAP_ALPHA: float = LOSS_OVERLAP_ALPHA
+    REAL_LOSS_SHAPE_UNOVERLAP_ALPHA: float = LOSS_SHAPE_UNOVERLAP_ALPHA
+
+    GRADUAL_LOSS_WEIGHTS: bool = False
 
     SEMANTIC_LOSS: bool = False
     LOSS_SEMANTIC_PR_TO_PO_ALPHA: float = 10.0
@@ -141,8 +152,6 @@ class AlgorithmConfig:
     BIDIR: bool = False
     BIDIR_RESOLUTION: int = 128
     BIDIR_SAMPLE_RATIO: float = 0.75
-    PERTURB_LOSS_LAMBDA_INIT_VAL: float = 1.0
-    PERTURB_LOSS_LAMBDA: bool = False
     OPT_POST_PRUNE: bool = False
     EXISTENCE_LR_MULTIPLIER: float = 5.0
     REFLECTION_LOSS: bool = False
@@ -150,6 +159,7 @@ class AlgorithmConfig:
     SEMANTIC_LOSS: bool = False
     SEMANTIC_LOSS_ALPHA: float = 1.0
     SEMANTIC_LOSS_BAND: float = 0.01
+    
 
     LOWER_SP: bool = False
     STOCHASTIC_PRECONDITION_INIT_VAL_LOWER: float = 2 * np.sqrt(3) * 0.01
@@ -251,9 +261,7 @@ def high_cost_mode():
     AlgorithmConfig.SAT_PATIENCE: int = 150
     AlgorithmConfig.MAX_ITER: int = 2500
 
-def perturb_loss_lambda():
-    AlgorithmConfig.PERTURB_LOSS_LAMBDA = True
-    AlgorithmConfig.PERTURB_LOSS_LAMBDA_INIT_VAL = 1.0
+def set_real_loss_lambda():
     AlgorithmConfig.REAL_LOSS_OCC_ALPHA = AlgorithmConfig.LOSS_OCC_ALPHA
     AlgorithmConfig.REAL_LOSS_SURFACE_ADJ_OCC_ALPHA = AlgorithmConfig.LOSS_SURFACE_ADJ_OCC_ALPHA
     AlgorithmConfig.REAL_LOSS_SURFACE_SDF_ALPHA = AlgorithmConfig.LOSS_SURFACE_SDF_ALPHA
@@ -375,8 +383,6 @@ def set_config_ablation(ablation: int, fastmode: bool = True):
         AlgorithmConfig.LOSS_OVERLAP_ALPHA = 1e-1
         AlgorithmConfig.LOSS_SHAPE_UNOVERLAP_ALPHA = 1e-1
         AlgorithmConfig.SMOOTHEN = False
-    elif ablation == 8:
-        perturb_loss_lambda()
     elif ablation == 9:
         AlgorithmConfig.OPT_POST_PRUNE = True
     elif ablation == 10:
@@ -387,7 +393,6 @@ def set_config_ablation(ablation: int, fastmode: bool = True):
         AlgorithmConfig.SEMANTIC_LOSS_ALPHA = 1.0
     elif ablation == 93:
         AlgorithmConfig.EARLY_STOP = False
-        perturb_loss_lambda()
         AlgorithmConfig.PRIM_TYPE = "VarAxisSF"
         AlgorithmConfig.OPT_POST_PRUNE = True
         AlgorithmConfig.BIDIR = True
@@ -484,8 +489,46 @@ def set_config_ablation(ablation: int, fastmode: bool = True):
         AlgorithmConfig.BIDIR = True
         new_loss_lambda()
         AlgorithmConfig.TVERSKY_MODE = False
-        AlgorithmConfig.SURFACE_ADJ_SDF_LOSS: bool = True
+        AlgorithmConfig.LOSS_SURFACE_ADJ_SDF: bool = True
         AlgorithmConfig.LOSS_SURFACE_ADJ_SDF_ALPHA: float = 1.0
+    elif ablation == 18:
+        AlgorithmConfig.PRIM_TYPE = "VarAxisSF"
+        AlgorithmConfig.BIDIR = True
+        new_loss_lambda()
+        AlgorithmConfig.TVERSKY_MODE = False
+        AlgorithmConfig.LOSS_SURFACE_ADJ_SDF: bool = True
+        AlgorithmConfig.LOSS_SURFACE_ADJ_SDF_ALPHA: float = 1.0
+        AlgorithmConfig.LOWER_SP = True
+    elif ablation == 19:
+        AlgorithmConfig.PRIM_TYPE = "VarAxisSF"
+        AlgorithmConfig.BIDIR = True
+        new_loss_lambda()
+        AlgorithmConfig.TVERSKY_MODE = True
+        AlgorithmConfig.LOSS_SURFACE_ADJ_SDF: bool = True
+        AlgorithmConfig.LOSS_SURFACE_ADJ_SDF_ALPHA: float = 1.0
+        AlgorithmConfig.LOWER_SP = True
+    elif ablation == 20:
+        AlgorithmConfig.PRIM_TYPE = "VarAxisSF"
+        AlgorithmConfig.BIDIR = True
+        new_loss_lambda()
+        AlgorithmConfig.TVERSKY_MODE = False
+        AlgorithmConfig.LOSS_SURFACE_ADJ_SDF: bool = True
+        AlgorithmConfig.LOSS_SURFACE_ADJ_SDF_ALPHA: float = 1.0
+        AlgorithmConfig.LOWER_SP = True
+        AlgorithmConfig.GRADUAL_LOSS_WEIGHTS = True
+    elif ablation == 21:
+        AlgorithmConfig.PRIM_TYPE = "VarAxisSF"
+        AlgorithmConfig.BIDIR = True
+        AlgorithmConfig.LOSS_PARAM_REGULARIZATION_ALPHA = 1e-4
+        new_loss_lambda()
+        set_real_loss_lambda()
+        AlgorithmConfig.TVERSKY_MODE = False
+        AlgorithmConfig.LOSS_SURFACE_ADJ_SDF: bool = True
+        AlgorithmConfig.LOSS_SURFACE_ADJ_SDF_ALPHA: float = 1.0
+        AlgorithmConfig.LOWER_SP = True
+        AlgorithmConfig.PRUNE_METRIC: str = "cd"
+        AlgorithmConfig.GRADUAL_LOSS_WEIGHTS = True
+
         # Using Tversky loss. 
         # Add CD+SurfaceIOU Metric
 

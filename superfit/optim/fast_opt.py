@@ -218,9 +218,6 @@ def run_optimization_loop_fast(init_opt_program, target_mesh, target, sketcher,
         mask_surface_adj = mask[size0:size0+size1]
         mask_surface = mask[size0+size1:]
         
-        if AlgConf.PERTURB_LOSS_LAMBDA and (i - decay_start_iter) < base_iters:
-            update_loss_lambda(i-decay_start_iter, base_iters)
-        ##  LOSSES - optimized computations
         total_loss = compiled_ops.compiled_loss_function(output_shape_occ, hard_target_fl, 
                                                 output_surface_adj_occ, hard_target_surface_adj_fl, 
                                                 output_surface_sdf,
@@ -345,18 +342,3 @@ def run_optimization_loop_fast(init_opt_program, target_mesh, target, sketcher,
             render_params[pos] = th.stack(param)
         Stats.record("render_params", render_params, log=False)
     return best_program
-
-
-def update_loss_lambda(i, base_iters, init_val=AlgConf.PERTURB_LOSS_LAMBDA_INIT_VAL):
-    final_val = 0
-    # The way to work it is sin of 3 x base_iters
-    cur_val = np.sin(i/base_iters * np.pi) * init_val
-    noise = 1 + (np.random.uniform(-0.75, 4, size=7) * cur_val)
-    AlgConf.LOSS_OCC_ALPHA = AlgConf.REAL_LOSS_OCC_ALPHA * noise[0]
-    AlgConf.LOSS_SURFACE_ADJ_OCC_ALPHA = AlgConf.REAL_LOSS_SURFACE_ADJ_OCC_ALPHA * noise[1]
-    AlgConf.LOSS_SURFACE_SDF_ALPHA = AlgConf.REAL_LOSS_SURFACE_SDF_ALPHA * noise[2]
-    AlgConf.LOSS_PRIMITIVE_COUNT_ALPHA = AlgConf.REAL_LOSS_PRIMITIVE_COUNT_ALPHA * noise[3]
-    AlgConf.LOSS_PARAM_REGULARIZATION_ALPHA = AlgConf.REAL_LOSS_PARAM_REGULARIZATION_ALPHA * noise[4]
-    AlgConf.LOSS_OVERLAP_ALPHA = AlgConf.REAL_LOSS_OVERLAP_ALPHA * noise[5]
-    AlgConf.LOSS_SHAPE_UNOVERLAP_ALPHA = AlgConf.REAL_LOSS_SHAPE_UNOVERLAP_ALPHA * noise[6]
-    

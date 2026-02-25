@@ -1,6 +1,7 @@
 # Code to initialize primitive from a given sdf volume. 
 import torch as th
-
+import torch as th
+from torch import tensor as T
 from superfit.utils.mesh_sdf import sdf_to_mesh
 import geolipi.symbolic as gls
 import superfit.symbolic as sps
@@ -35,11 +36,6 @@ W_RAD_TREND = 0.5       # Weight for radius trend (taper) penalty
 W_RAD_VARIANCE = 0.5    # Weight for radius residual variance penalty
 W_SLAB_PENALTY = 0.25   # Penalty for slab-like (flat) configurations
 
-# PCA-based axis scoring (slightly different weights)
-W_ELONGATION_PCA = 0.0
-W_ANISOTROPY_PCA = 0.5
-W_RAD_TREND_PCA = 1.0
-W_RAD_VARIANCE_PCA = 1.0
 
 # =============================================================================
 # CLAMP BOUNDS
@@ -151,6 +147,7 @@ def _frame_from_z(z):
     x = _safe_normalize(x)
     y = th.cross(z, x, dim=-1)
     return x, y, z
+    
 
 def choose_extrusion_axis_from_mesh_v1(mesh, nbins=DEFAULT_NBINS_MESH, n_samples=DEFAULT_N_SAMPLES, min_pts_per_bin=DEFAULT_MIN_PTS_PER_BIN_MESH, version="v1"):
     """
@@ -158,8 +155,6 @@ def choose_extrusion_axis_from_mesh_v1(mesh, nbins=DEFAULT_NBINS_MESH, n_samples
 
     Returns: best_dir (torch[3]), scores (dict[dir_key -> float])
     """
-    import torch as th
-    from torch import tensor as T
 
     device = 'cuda' if th.cuda.is_available() else 'cpu'
 
@@ -316,7 +311,7 @@ def _axis_cyl_score_fast(
 
 def choose_extrusion_axis_from_pca_v2(
     X, V, nbins=DEFAULT_NBINS, min_pts_per_bin=DEFAULT_MIN_PTS_PER_BIN,
-    w_elong=W_ELONGATION_PCA, w_aniso=W_ANISOTROPY_PCA, w_radtrend=W_RAD_TREND_PCA, w_radvar=W_RAD_VARIANCE_PCA,
+    w_elong=W_ELONGATION, w_aniso=W_ANISOTROPY, w_radtrend=W_RAD_TREND, w_radvar=W_RAD_VARIANCE,
     slab_penalty=W_SLAB_PENALTY, use_bin_medians=True
 ):
     """

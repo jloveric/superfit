@@ -23,7 +23,7 @@ from ..optim.curvature import get_points_and_weights
 from ..utils.config import AlgorithmConfig as AlgConf, reset_eval_seeds
 from ..utils.stats import Stats
 from ..utils.logger import logger
-from ..symbolic.utils import n_prims_in_expr, fetch_singular_expr
+from ..symbolic.utils import n_prims_in_expr, fetch_singular_expr_eval
 from ..optim.semantic_loss import SemanticLossHolder
 from .kmeans import primitive_semantic_nmi_fast
 
@@ -185,7 +185,7 @@ def eval_shape(pred_program, measure_pack, semantic_loss_holder: SemanticLossHol
         Stats.record("unoverlap_amount", unoverlap_amount.item())
 
         # partitioning. 
-        sampled_expr = fetch_singular_expr(pred_program.sympy(), relaxed_eval=False)
+        sampled_expr = fetch_singular_expr_eval(pred_program.sympy(), relaxed_eval=False)
         new_expr = recursive_sm_to_smg(sampled_expr.sympy())
         mat_expr, _ = recursive_gls_to_sysl(new_expr, ind=0, version="v1")
         outputs = recursive_evaluate_mat_expr(mat_expr.tensor(dtype=sketcher_3d.dtype), sketcher_3d)
@@ -352,7 +352,6 @@ def get_recon_measure(in_expr, sketcher, measure_pack: MeasurePack, convert_to_s
 
         pt_output_sdf = recursive_evaluate(in_expr, sketcher, coords=surface_adj_points)
         
-
     if measure == "tversky":
         hard_output = (output_sdf <= 0.0)
         out_measure = get_tversky_iou(hard_output, target_occ)
@@ -373,7 +372,7 @@ def get_recon_measure(in_expr, sketcher, measure_pack: MeasurePack, convert_to_s
         vox_hard_output = (output_sdf <= 0.0)
         out_measure_1 = get_curvature_aware_iou(pt_hard_output, pt_target_occ, curvature_weights=curvature_weights)
         out_measure_2 = get_iou(vox_hard_output, vox_target_occ)
-        measure = (measure_1 + measure_2) / 2.0
+        measure = (out_measure_1 + out_measure_2) / 2.0
     elif measure == "cd":
         try:
             out_measure = get_cd_measure(output_sdf, target_pc, sketcher)
@@ -599,8 +598,6 @@ def get_cd_measure(output_sdf, target_pc, sketcher):
     cd = th.cdist(output_pc, target_pc, p=2) ** 2
     cd_1 = th.min(cd, dim=1)[0]
     cd_2 = th.min(cd, dim=0)[0]
-    cd_1_mean = th.mean(cd_1)
-    cd_2_mean = th.mean(cd_2)
     cd_avg = (th.mean(cd_1) + th.mean(cd_2)) / 2.0
     measure = 1 - (cd_avg * CD_MULTIPLIER)
     return measure

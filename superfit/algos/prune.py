@@ -7,7 +7,7 @@ import itertools
 import geolipi.symbolic as gls
 from geolipi.torch_compute.evaluate_expression import recursive_evaluate
 
-from ..symbolic.utils import inject_temp_param, fetch_singular_expr, gather_primitives, fetch_singular_expr_eval
+from ..symbolic.utils import inject_temp_param, gather_primitives, fetch_singular_expr_eval
 from .eval_tools import get_recon_measure, get_recon_measure_packed, MeasurePack
 from ..symbolic.utils import gather_instance_dropout_alternatives, gather_smooth_union_ops, generate_from_sm_ops_and_primitives
 from ..utils.config import AlgorithmConfig as AlgConf, initialize_seeds
@@ -110,7 +110,6 @@ def sampling_based_pruning(in_expr, sketcher, measure_pack, n_samples=100):
     stochastic_expr = inject_temp_param(in_expr, (temp_scale,))
     expr_set = set()
     while (prev_n_exprs < n_samples):
-        # new_expr = fetch_singular_expr(stochastic_expr, relaxed_eval=True, remove_marker=False)
         new_expr = fetch_singular_expr_eval(stochastic_expr, relaxed_eval=True, remove_marker=False)
         if not new_expr is None:
             expr_set.add(new_expr.sympy())

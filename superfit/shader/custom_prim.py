@@ -1,4 +1,8 @@
-
+"""
+Custom primitives to speed up SuperGeon.
+Did not really speed up things :(.
+Uncomment the SMMap["SuperGeon"] = CustomSuperGeon line to use this.
+"""
 import numpy as np
 from sysl.shader.shader_module import register_shader_module
 from sysl.shader.shader_templates.common import CONSTANTS

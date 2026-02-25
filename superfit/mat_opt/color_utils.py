@@ -1,11 +1,7 @@
-import trimesh
-import cubvh
+
 import torch.nn.functional as F
 import torch as th
-import numpy as np
-import sysl.symbolic as sls
-import geolipi.symbolic as gls
-import time
+
 from sysl.shader.utils.texture import gather_textures
 from superfit.utils.config import AlgorithmConfig as AlgConf
 

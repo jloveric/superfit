@@ -40,23 +40,6 @@ def get_best_pkl_in_folder(folder_path: str) -> Optional[str]:
             return os.path.join(folder_path, name)
     return None
 
-
-def _load_program(info_dict: dict, iter_idx: int):
-    """Load best program for iteration; support nested or flat pkl keys."""
-    key = f"iter_{iter_idx}.best_program"
-    try:
-        return get_best_expr(info_dict, iter_idx)
-    except (KeyError, TypeError):
-        expr_key = f"{key}.expr_str"
-        if expr_key not in info_dict:
-            raise KeyError(f"Missing {expr_key} in pkl")
-        state = {
-            "expr_str": info_dict[expr_key],
-            "symbol_tensor_map": info_dict.get(f"{key}.symbol_tensor_map", {}),
-        }
-        return gls.GLFunction.from_state(state).sympy()
-
-
 def _numeric_stats(flat: Dict[str, Any]) -> Dict[str, float]:
     """Extract numeric evaluation metrics from flat stats (strip iter_X. prefix)."""
     out = {}
@@ -108,7 +91,7 @@ def eval_one_folder(pkl_path: str, eval_last_only: bool, save_per_instance: bool
     Stats.reset()
     for i in iter_indices:
         with Stats.scope(f"iter_{i}"):
-            in_expr = _load_program(info, i)
+            in_expr = get_best_expr(info, i)
             best_program, _, _, _ = sampling_based_pruning(in_expr, sketcher, measure_pack)
             eval_shape(best_program, measure_pack, semantic_loss_holder)
 

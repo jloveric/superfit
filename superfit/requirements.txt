@@ -1,0 +1,18 @@
+
+# faiss-gpu
+
+cc3d 
+ot #POT
+trimesh
+igl
+distinctipy
+json
+fastsweep
+PIL
+pip install connected-components-3d POT trimesh libigl distinctipy fastsweep pillow
+# For SySL
+pip install jinja2 moderngl moderngl-window
+
+# kaolin
+
+# cubvh

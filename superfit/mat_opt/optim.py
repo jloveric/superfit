@@ -1,8 +1,5 @@
 
-import trimesh
-import cubvh
 import torch as th
-import numpy as np
 import sysl.symbolic as sls
 import geolipi.symbolic as gls
 import time
@@ -10,9 +7,8 @@ from superfit.optim.utils import perform_stochastic_precondition, sample_surface
 from superfit.utils.mesh_preprocess import quick_sample_points
 from superfit.optim.param_conversion import params_from_variables, transform_to_tunable
 from sysl.torch_compute.evaluate_mat_expr import recursive_evaluate_mat_expr
-from sysl.shader.utils.texture import gather_textures
 from superfit.utils.config import AlgorithmConfig as AlgConf
-from .color_utils import material_loss_rgb_oklab_huber, tv_loss_flat, laplacian_loss_flat
+from .color_utils import material_loss_rgb_oklab_huber, laplacian_loss_flat
 from .utils import query_materials_from_surface_cubvh
 from superfit.utils.logger import logger
 from superfit.utils.stats import Stats

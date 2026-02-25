@@ -1,4 +1,6 @@
-
+"""
+Shaders for the variable axis primitives.
+"""
 import numpy as np
 from sysl.shader.shader_module import register_shader_module
 from sysl.shader.shader_templates.common import CONSTANTS
@@ -36,7 +38,6 @@ float SuperGeonY(vec3 p, vec3 size, float roundness, float dilate_3d, float scal
     return SuperGeon(p, size, roundness, dilate_3d, scale, bulge_ratio, onion_ratio, trapeze, taper_bulge, rot2d);
 }""")
 
-
 SFSPYShader = register_shader_module("""
 @name SFSPY
 @inputs pos, size, params, onion_ratio
@@ -48,7 +49,6 @@ float SFSPY(vec3 p, vec3 size, vec4 params, float onion_ratio)
 {
     return SFSP(p, size, params, onion_ratio);
 }""")       
-
 
 SuperFrustumZShader = register_shader_module("""
 @name SuperFrustumZ

@@ -9,7 +9,6 @@ import superfit.symbolic as sps
 from .symbolic_types import VALID_BATCHED_STOCHASTIC_SU_CLASSES, VARAXIS_CLASSES, SFSP_CLASSES, SFSP_UNRAVEL_CLASSES
 from .base import StochasticPrimitive, PrimitiveMarker
 
-
 VARAXIS_MAP = {
     sps.VarAxisSF: {
         0: sps.SuperFrustumY,
@@ -33,7 +32,7 @@ VARAXIS_MAP = {
     },
 }
 
-sfsp_conversion_map = {
+SFSP_CONVERSION_MAP = {
     sps.SFSPX: sps.SuperFrustumX,
     sps.SFSPY: sps.SuperFrustumY,
     sps.SFSPZ: sps.SuperFrustumZ,
@@ -83,7 +82,7 @@ def recursive_sfsp_to_sf(gls_expr):
         new_args = []
         cur_expr = gls_expr.sympy()
         ntc_args = cur_expr.get_args()
-        new_expr = sfsp_conversion_map[gls_expr.__class__](ntc_args[0], 
+        new_expr = SFSP_CONVERSION_MAP[gls_expr.__class__](ntc_args[0], 
                     (ntc_args[1][0],), 
                     (ntc_args[1][1],), 
                     (ntc_args[1][2],), 
@@ -112,7 +111,7 @@ def recursive_sf_to_sfsp(gls_expr):
         arg_0 = ntc_args[0]
         arg_1 = (ntc_args[1][0], ntc_args[2][0], ntc_args[3][0], ntc_args[4][0],)
         arg_2 = ntc_args[5]
-        new_expr = sfsp_conversion_map[gls_expr.__class__](arg_0, arg_1, arg_2)
+        new_expr = SFSP_CONVERSION_MAP[gls_expr.__class__](arg_0, arg_1, arg_2)
         return new_expr
     else:
         if isinstance(gls_expr, gls.GLFunction):
@@ -190,8 +189,6 @@ def n_prims_in_expr(expr, n_prims=0):
         return 0
 
 
-            
-
 def fetch_singular_expr_stochastic(expr, relaxed_eval=True):
     expr = expr.tensor()
     logits = expr.args[1]
@@ -232,56 +229,6 @@ def reduce_varaxis(expr, temperature: float = 0.1, relaxed_eval: bool = True):
 
     new_expr = VARAXIS_MAP[expr.__class__][int(sel_ind)](*remaining_args)
     return new_expr
-
-def fetch_singular_expr(expr, temperature=0.1, relaxed_eval=True, remove_marker=True):
-    if isinstance(expr, StochasticPrimitive):
-        new_expr = fetch_singular_expr_stochastic(expr, relaxed_eval=relaxed_eval)
-        out_expr = fetch_singular_expr(new_expr, temperature=temperature, relaxed_eval=relaxed_eval, remove_marker=remove_marker)
-        return out_expr
-    elif isinstance(expr, PrimitiveMarker):
-        in_expr = fetch_singular_expr(expr.args[0], temperature=temperature, relaxed_eval=relaxed_eval, remove_marker=remove_marker)
-        if remove_marker:
-            return in_expr
-        else:
-            if isinstance(in_expr, gls.NullExpression3D):
-                return in_expr
-            else:
-                return expr.__class__(in_expr)
-    elif isinstance(expr, gls.GLFunction):
-        new_args = []
-        has_null = False
-        for arg in expr.args:
-            if isinstance(arg, gls.GLFunction):
-                new_expr = fetch_singular_expr(arg, temperature=temperature, relaxed_eval=relaxed_eval, remove_marker=remove_marker)
-                if not isinstance(new_expr, gls.NullExpression3D):
-                    new_args.append(new_expr)
-                else:
-                    has_null = True
-            elif arg in expr.lookup_table:
-                new_args.append(expr.lookup_table[arg])
-            else:
-                new_args.append(arg)
-        if isinstance(expr, gls.SmoothUnion):
-            if len(new_args) == 1:
-                return gls.NullExpression3D()
-            elif len(new_args) == 2:
-                return new_args[0]
-            else: 
-                return expr.__class__(*new_args)
-        elif isinstance(expr, gls.Union):
-            if len(new_args) == 0:
-                return gls.NullExpression3D()
-            elif len(new_args) == 1:
-                return new_args[0]
-            else: 
-                return expr.__class__(*new_args)
-        else:
-            if has_null:
-                return gls.NullExpression3D()
-            else:
-                return expr.__class__(*new_args)
-    else:
-        return expr
 
 def fetch_singular_expr_eval(expr, temperature=0.1, relaxed_eval=True, remove_marker=True):
     if isinstance(expr, StochasticPrimitive):
@@ -486,7 +433,6 @@ def gather_instance_dropout_alternatives(program):
     alternative_exprs.insert(0, temp_expr)
     alternative_exprs = [x for x in alternative_exprs if x is not None]
     return alternative_exprs
-
 
 
 def extract_primitive_bundles(expression):

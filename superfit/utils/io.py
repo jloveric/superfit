@@ -1,6 +1,7 @@
 import torch as th
 import os
 import csv
+import _pickle as cPickle
 import distinctipy
 import numpy as np
 import geolipi.symbolic as gls
@@ -70,13 +71,6 @@ def load_partobjaverse_mesh_paths(location=PARTOBJAVERSE_MESH_DIR):
     files = [os.path.join(location, f) for f in files]
     files = [f for f in files if f.endswith(".glb")]
     return files
-
-
-def get_best_expr(info_dict, iter_idx, prog_type = "best_program"):
-    iter_key = f"iter_{iter_idx}.{prog_type}"
-    out_expr = info_dict[iter_key]
-    init_expr = gls.GLFunction.from_state(out_expr).sympy()
-    return init_expr
 
 
 def to_cpu_recursive(x, *, clone: bool = False, detach: bool = False, _memo=None):
@@ -158,3 +152,17 @@ def to_cpu_recursive(x, *, clone: bool = False, detach: bool = False, _memo=None
 
     # Fallback: unknown container/type, return as-is
     return x
+
+
+def get_best_expr(info_dict, iter_idx=None, prog_type = "best_program"):
+    if iter_idx is None:
+        iter_idx = info_dict.get("n_iters", 0) - 1
+    iter_key = f"iter_{iter_idx}.{prog_type}"
+    if iter_key not in info_dict:
+        iter_key = f"iter_{iter_idx}.pruned_program"
+        if iter_key not in info_dict:
+            raise ValueError(f"iter_key {iter_key} not found in info_dict")
+    out_expr = info_dict[iter_key]
+    init_expr = gls.GLFunction.from_state(out_expr).sympy()
+    return init_expr
+

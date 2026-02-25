@@ -1,7 +1,5 @@
 import time
 import torch as th
-import trimesh
-import numpy as np
 import _pickle as cPickle
 from geolipi.torch_compute import Sketcher, recursive_evaluate
 from ..utils.io import to_cpu_recursive

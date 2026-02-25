@@ -1,3 +1,8 @@
+"""
+Custom evaulation to speed up SuperGeon.
+Did not really speed up things :(.
+uncomment the @rec_shader_eval.register decorator to use this.
+"""
 import geolipi.symbolic as gls
 import superfit.symbolic as sps
 from sysl.shader.global_shader_context import GlobalShaderContext

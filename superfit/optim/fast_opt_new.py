@@ -2,11 +2,9 @@
 import time
 import torch as th
 import numpy as np
-import geolipi.symbolic as gls
 import superfit.symbolic as sps
 import cubvh
 from collections import defaultdict
-import trimesh
 from .param_conversion import params_from_variables
 from ..symbolic.utils import gather_primitives
 from ..utils.config import AlgorithmConfig as AlgConf
@@ -236,7 +234,7 @@ def run_optimization_loop_fast(init_opt_program, target_mesh, target, sketcher,
         mask_surface_adj = mask[size0:size0+size1]
         mask_surface = mask[size0+size1:]
         
-        if AlgConf.PERTURB_LOSS_LAMBDA and (i - decay_start_iter) < base_iters:
+        if AlgConf.GRADUAL_LOSS_WEIGHTS and (i - decay_start_iter) < base_iters:
             update_loss_lambda(i-decay_start_iter, base_iters)
         ##  LOSSES - optimized computations
         total_loss = compiled_ops.compiled_loss_function(output_shape_occ, hard_target_fl, 
@@ -268,7 +266,7 @@ def run_optimization_loop_fast(init_opt_program, target_mesh, target, sketcher,
             semantic_loss = compute_semantic_loss(point_soft_assoc, sem_mask, sem_points_labels, n_sem_classes, transformed_params)
             total_loss = total_loss + semantic_loss * AlgConf.SEMANTIC_LOSS_ALPHA
         
-        if AlgConf.SURFACE_ADJ_SDF_LOSS:
+        if AlgConf.LOSS_SURFACE_ADJ_SDF:
             surf_adj_sdf_delta = (output_surface_adj_sdf - surface_sampled_sdf) ** 2
             surf_adj_sdf_delta = surf_adj_sdf_delta * (1 + curvature_weights)
             mask_surface_adj_sum = mask_surface_adj.sum()
@@ -383,16 +381,16 @@ def run_optimization_loop_fast(init_opt_program, target_mesh, target, sketcher,
     return best_program
 
 
-def update_loss_lambda(i, base_iters, init_val=AlgConf.PERTURB_LOSS_LAMBDA_INIT_VAL):
+def update_loss_lambda(i, base_iters, init_val=1.0):
     final_val = 0
-    # The way to work it is sin of 3 x base_iters
-    cur_val = np.sin(i/base_iters * np.pi) * init_val
-    noise = 1 + (np.random.uniform(-0.75, 4, size=7) * cur_val)
-    AlgConf.LOSS_OCC_ALPHA = AlgConf.REAL_LOSS_OCC_ALPHA * noise[0]
-    AlgConf.LOSS_SURFACE_ADJ_OCC_ALPHA = AlgConf.REAL_LOSS_SURFACE_ADJ_OCC_ALPHA * noise[1]
-    AlgConf.LOSS_SURFACE_SDF_ALPHA = AlgConf.REAL_LOSS_SURFACE_SDF_ALPHA * noise[2]
-    AlgConf.LOSS_PRIMITIVE_COUNT_ALPHA = AlgConf.REAL_LOSS_PRIMITIVE_COUNT_ALPHA * noise[3]
-    AlgConf.LOSS_PARAM_REGULARIZATION_ALPHA = AlgConf.REAL_LOSS_PARAM_REGULARIZATION_ALPHA * noise[4]
-    AlgConf.LOSS_OVERLAP_ALPHA = AlgConf.REAL_LOSS_OVERLAP_ALPHA * noise[5]
-    AlgConf.LOSS_SHAPE_UNOVERLAP_ALPHA = AlgConf.REAL_LOSS_SHAPE_UNOVERLAP_ALPHA * noise[6]
+    frac = min(i / (base_iters), 1.0)
+    alpha = init_val * frac + final_val * (1 - frac)
+    # AlgConf.LOSS_OCC_ALPHA = AlgConf.REAL_LOSS_OCC_ALPHA * alpha
+    # AlgConf.LOSS_SURFACE_ADJ_OCC_ALPHA = AlgConf.REAL_LOSS_SURFACE_ADJ_OCC_ALPHA * alpha
+    # AlgConf.LOSS_SURFACE_SDF_ALPHA = AlgConf.REAL_LOSS_SURFACE_SDF_ALPHA * alpha
+    # AlgConf.LOSS_SURFACE_ADJ_SDF_ALPHA = AlgConf.REAL_LOSS_SURFACE_ADJ_SDF_ALPHA * alpha
+    # AlgConf.LOSS_PARAM_REGULARIZATION_ALPHA = AlgConf.REAL_LOSS_PARAM_REGULARIZATION_ALPHA * alpha
+    # AlgConf.LOSS_PRIMITIVE_COUNT_ALPHA = AlgConf.REAL_LOSS_PRIMITIVE_COUNT_ALPHA * alpha
+    AlgConf.LOSS_OVERLAP_ALPHA = AlgConf.REAL_LOSS_OVERLAP_ALPHA * alpha
+    AlgConf.LOSS_SHAPE_UNOVERLAP_ALPHA = AlgConf.REAL_LOSS_SHAPE_UNOVERLAP_ALPHA * alpha
     

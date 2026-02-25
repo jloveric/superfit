@@ -3,6 +3,15 @@
 Code Release for Resfit. 
 
 To provide: 
+Table of Primitive, and supported OP
+
+SuperFrustum ALL
+SuperGeon No support for editing
+SQ - No Support for shader or editing
+SPProto - No Support for Editing. 
+Cuboid - No Support for Editing no VarAxis 
+SFSolid - No support for Editing no Varaxis
+Rest -> Only Shader/ No Opt etc.
 
 1. All the different primitives: 
     [Full Support] - (Cuboid, SQ, SF, SFSolid, SFVarAxis, ProtoPrim, SG/VarAxis... ) 
@@ -10,7 +19,7 @@ To provide:
     1. Torch Execution
     2. Shader Code. 
 
-2. Different Decomposition Procedures: 
+2. Single Decomposition Procedures: 
     1. All three (VHACD, COACD, MSD)
 
 3. ResFit (Only for SF): 
@@ -25,8 +34,8 @@ To provide:
     2. Fit Color To generate Textured Assets.
         b) Export to editing version / html
     3. Generate Optimization videos. 
-    4. Text to 3D to Primitive 
-    5. Primitive to 3D Gen with Space Control.  
+    4. Text/IMG to 3D to Primitive
+    5. Primitive to 3D Gen with Space Control
     6. Mesh to Solid Fitting. 
 
 5. Eval Over Dataset Code.

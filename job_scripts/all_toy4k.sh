@@ -64,7 +64,7 @@ for ((gpu=0; gpu<NUM_GPUS; gpu++)); do
             set +a
         fi
         # Activate conda environment
-        conda activate sf
+        conda activate sfn
         cd "$SCRIPT_DIR"
         python scripts/testset_fit_primitives.py --start_ind $CURRENT_START --end_ind $CURRENT_END --ablation $ABLATION --fastmode --overwrite --aot_postfix $AOT_POSTFIX
         # python scripts/testset_fit_primitives.py --start_ind $CURRENT_START --end_ind $CURRENT_END --ablation $ABLATION --fastmode --overwrite --aot_postfix $AOT_POSTFIX --dataset partobjaverse
