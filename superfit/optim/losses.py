@@ -4,6 +4,7 @@ from ..utils.config import AlgorithmConfig as AlgConf
 from ..torch_compute.compile_friendly import sample_gumbel
 from ..utils.logger import logger
 PARAM_MUL = 1e6
+ON_CONST = 100
 
 def get_batched_overlap_loss(prim_execs, full_execution, scale_factor):
     # Fuse operations where possible
@@ -58,8 +59,10 @@ def get_param_loss_sf(transformed_params):
     # lower_bound_scale = prim_params[:, 3:6] * prim_params[:, 8:9]
     # lower_bound_loss = th.where(lower_bound_scale < 0.01, -lower_bound_scale * PARAM_MUL, th.zeros_like(lower_bound_scale)).sum()
     # prim_loss = prim_size_loss + lower_bound_loss
+    onion_param = th.clamp(prim_params[:, 10:11] - prim_params[:, 7:8], min=0.5)
+    onion_loss = th.sum(ON_CONST * th.pow(onion_param, ON_CONST))
     # dilation_loss = prim_params[:, 11:12].sum()
-    loss = su_loss + prim_size_loss
+    loss = su_loss + prim_size_loss + onion_loss
     return loss
     
 
@@ -69,10 +72,12 @@ def compute_total_loss(output_shape_occ, hard_target_fl,
                  primitive_sdfs, output_sdf, 
                  mask_shape, mask_surface, mask_surface_adj,
                  transformed_params, 
-                 scale_factor, curvature_weights):
+                 scale_factor, curvature_weights, base_curvature_weights):
 
     # Shape occupancy loss
-    delta_shape = (output_shape_occ - hard_target_fl) ** 2
+    # delta_shape = (output_shape_occ - hard_target_fl) ** 2 
+    delta_shape = (output_shape_occ - hard_target_fl) ** 2 * (1 + base_curvature_weights)
+
     mask_shape_sum = mask_shape.sum()
     loss_shape_occ = 0.5 * (mask_shape * delta_shape).sum() / (mask_shape_sum + 1e-8)
 

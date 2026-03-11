@@ -5,6 +5,7 @@ MIN_VOLUME_LIMIT = 0.0001
 # Dataset paths
 TOY4K_PATH_PREFIX = "/users/aganesh8/data/aganesh8/data/toys4k_obj_files"
 PARTOBJAVERSE_MESH_DIR = "/users/aganesh8/data/aganesh8/data/partobjaverse/PartObjaverse-Tiny/PartObjaverse-Tiny_mesh"
+PARTOBJAVERSE_INSTANCE_DIR = "/users/aganesh8/data/aganesh8/data/partobjaverse/PartObjaverse-Tiny_instance_gt"
 AOT_ARTIFACT_DIR = "/users/aganesh8/data/aganesh8/data/project_neo/aot"
 # SAVE_DIR_BASE = "/users/aganesh8/data/aganesh8/projects/project_neo/outputs"
 SAVE_DIR_BASE = "/oscar/data/dritchi1/aganesh8/data/project_neo/outputs"

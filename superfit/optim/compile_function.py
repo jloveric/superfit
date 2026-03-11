@@ -13,7 +13,8 @@ from ..utils.config import AlgorithmConfig as AlgConf
 from ..utils.logger import logger
 from .param_conversion import params_from_variables
 from .primitive_registry import PrimitiveHandler
-
+from .losses import compute_semantic_loss
+from .param_conversion.sf_handler import make_point2prim_distr_smu
 N_OPT_ITERS = 5
 
 def compile_program_jit(in_program, sketcher, handler: PrimitiveHandler,
@@ -99,20 +100,30 @@ def compile_cached_with_dummy_opt(in_program, sketcher,
             out = compiled_su_func(out, output[i], k_reshaped)
         
         return (output, out)
+    
+    point2prim_soft = make_point2prim_distr_smu(comp_func)
+    # point2prim_soft = th.compile(handler.point2prim_soft, 
+    #     backend="inductor",
+    #     # mode="max-autotune",
+    #     mode="default",
+    #     fullgraph=True,
+    #     dynamic=True,
+    # )
+
     def total_loss_with_params(output_shape_occ, hard_target_fl, 
                  output_surface_adj_occ, hard_target_surface_adj_fl, 
                  output_surface_sdf,
                  primitive_sdfs, output_sdf, 
                  mask_shape, mask_surface, mask_surface_adj,
                  transformed_params, 
-                 scale_factor, curvature_weights):
+                 scale_factor, curvature_weights, base_curvature_weights):
         loss_1 = compute_total_loss(output_shape_occ, hard_target_fl, 
                  output_surface_adj_occ, hard_target_surface_adj_fl, 
                  output_surface_sdf,
                  primitive_sdfs, output_sdf, 
                  mask_shape, mask_surface, mask_surface_adj,
                  transformed_params, 
-                 scale_factor, curvature_weights)
+                 scale_factor, curvature_weights, base_curvature_weights)
         loss_2 = handler.get_param_loss(transformed_params) 
         total_loss = loss_1 + AlgConf.LOSS_PARAM_REGULARIZATION_ALPHA * loss_2
         return total_loss
@@ -148,6 +159,7 @@ def compile_cached_with_dummy_opt(in_program, sketcher,
     SURF_SIZE = AlgConf.N_SURFACE_POINTS
     BATCH_SIZE = arg_0.shape[0]
     _coords = th.randn(1, PC_SIZE, 3, dtype=dtype, device=device).clone().detach().requires_grad_(False)
+    _base_curvature_weights = th.randn(PC_SIZE, dtype=dtype, device=device).clone().detach().requires_grad_(False)
     _surface_coords = th.randn(1, SURF_SIZE, 3, dtype=dtype, device=device).clone().detach().requires_grad_(False)
     _surface_adj_coords = th.randn(1, SURF_SIZE, 3, dtype=dtype, device=device).clone().detach().requires_grad_(False)
 
@@ -172,7 +184,12 @@ def compile_cached_with_dummy_opt(in_program, sketcher,
     primitive_sdfs = th.randn(BATCH_SIZE, PC_SIZE + 2 * SURF_SIZE, dtype=dtype, device=device).clone().detach().requires_grad_(True)
     output_sdf = th.randn(PC_SIZE + 2 * SURF_SIZE, dtype=dtype, device=device).clone().detach().requires_grad_(True)
 
+    sem_points = th.randn(SURF_SIZE, 3, dtype=dtype, device=device).clone().detach().requires_grad_(False)
+    sem_points_labels = th.randint(0, 2, (SURF_SIZE,), dtype=th.long, device=device).clone().detach().requires_grad_(False)
+    n_sem_classes = 2 + 1
+
     dynamo.mark_dynamic(_coords, 1)
+    dynamo.mark_dynamic(_base_curvature_weights, 0)
     dynamo.mark_dynamic(_params, 0, min=2, max=100)
     dynamo.mark_dynamic(_logits, 0, min=2, max=100)
     dynamo.mark_dynamic(_su_vals, 0, min=1, max=99)
@@ -214,8 +231,18 @@ def compile_cached_with_dummy_opt(in_program, sketcher,
                                         primitive_sdfs, output_sdf, 
                                         mask_shape, mask_surface, mask_surface_adj,
                                         transformed_params, 
-                                        scale_factor, _curvature_weights)
+                                        scale_factor, _curvature_weights, _base_curvature_weights)
         total_loss = loss_1 + loss_2
+        if AlgConf.SEMANTIC_LOSS:
+            # First gather points. 
+            point_soft_assoc, sem_output_sdf = point2prim_soft(sem_points, transformed_params, smu_k=0.05, scale_factor=scale_factor)
+
+            sem_mask = (sem_output_sdf[0] <= AlgConf.LOSS_BAND)# .float()
+            n_points = sem_mask.sum().item()
+            if n_points == 0:
+                continue
+            semantic_loss = compute_semantic_loss(point_soft_assoc, sem_mask, sem_points_labels, n_sem_classes, transformed_params)
+            total_loss = total_loss + semantic_loss * AlgConf.SEMANTIC_LOSS_ALPHA
         total_loss.backward()
         optim.step()
         end_time = time.time()
@@ -226,7 +253,7 @@ def compile_cached_with_dummy_opt(in_program, sketcher,
         compiled_loss_function=compiled_loss_function,
         param_from_variables=compiled_param_from_variables,
         point2prim_hard=handler.point2prim_hard,
-        point2prim_soft=handler.point2prim_soft,
+        point2prim_soft=point2prim_soft,
     )
     logger.info("Finished compiling with dummy opt")
     if AlgConf.SAVE_JIT_CACHE:

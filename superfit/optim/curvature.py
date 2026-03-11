@@ -261,4 +261,61 @@ def get_points_and_weights(target_mesh, sketcher, n_points=10000):
     C_norm = curvature_to_weight(C_pts, Cmin=0, Cmax=30, steepness=8)
     points = th.from_numpy(P).float().to(sketcher.device).to(sketcher.dtype)
     weights = th.from_numpy(C_norm).float().to(sketcher.device).to(sketcher.dtype)
-    return points, weights
+    return points, weights, C_multi
+
+
+def get_curvature_weights_for_points(
+    query_points,
+    BVH,
+    target_mesh,
+    C_vertex=None,
+    Cmin=0,
+    Cmax=30,
+    steepness=8,
+    mode='watertight',
+):
+    """
+    Compute curvature weights for arbitrary query points (e.g. base_coords) by
+    finding the closest mesh face via cuBVH and interpolating per-vertex
+    curvature weights using barycentric coordinates.
+
+    Parameters
+    ----------
+    query_points : torch.Tensor
+        (N, 3) query coordinates (e.g. base_coords before unsqueeze).
+    BVH : cubvh.cuBVH
+        Pre-built BVH for target_mesh (vertices, faces).
+    target_mesh : trimesh.Trimesh
+        Target mesh; used for V, F and optionally to compute C_vertex.
+    C_vertex : np.ndarray, optional
+        (V,) per-vertex curvedness. If None, computed via multiscale_curvedness_igl.
+    Cmin, Cmax, steepness : float
+        Passed to curvature_to_weight for mapping curvedness to [0,1] weights.
+
+    Returns
+    -------
+    weights : torch.Tensor
+        (N,) curvature weights on same device/dtype as query_points.
+    """
+    device = query_points.device
+    dtype = query_points.dtype
+    query_points = query_points.contiguous()
+
+    V = target_mesh.vertices.view(np.ndarray).astype(np.float64)
+    F = target_mesh.faces.view(np.ndarray).astype(np.int32)
+
+    if C_vertex is None:
+        with th.autocast("cuda", dtype=th.float32):
+            C_multi, _, _, _ = multiscale_curvedness_igl(V, F, sigmas=None, combine="mean")
+        C_vertex = C_multi
+
+    W_vertex = curvature_to_weight(C_vertex, Cmin=Cmin, Cmax=Cmax, steepness=steepness)
+    W_vertex = th.from_numpy(W_vertex).float().to(device)
+
+    dists, face_idx, uvw = BVH.signed_distance(query_points, return_uvw=True, mode=mode)
+    faces_th = th.from_numpy(F).long().to(device)
+    face_vertex_indices = faces_th[face_idx]
+    face_weights = W_vertex[face_vertex_indices]
+    weights = (uvw * face_weights).sum(dim=1)
+    weights[dists > 0.0] = 0.0
+    return weights.to(dtype)

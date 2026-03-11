@@ -2,6 +2,7 @@
 import os
 import ast
 import time
+import numpy as np
 import torch as th
 import superfit.symbolic as sps
 from ..symbolic.utils import (inject_temp_param, remove_temp_param,)
@@ -18,10 +19,11 @@ from .main_opt import run_optimization_loop
 from .fast_opt_new import run_optimization_loop_fast
 from ..algos.eval_tools import get_recon_measure, MeasurePack
 from .compile_function import compile_program_jit, compile_cached_with_dummy_opt
+import trimesh
 from ..utils.mesh_preprocess import quick_sample_points
 
 def optimize_primitive_assembly(in_program, target_mesh, target_sdf, sketcher,
-                       measure_pack, post_prune=False):
+                       measure_pack, post_prune=False, original_mesh=None, original_annotations=None):
     """
     Optimized version of opt_till_saturation with configurable optimizer setup.
     
@@ -90,7 +92,7 @@ def optimize_primitive_assembly(in_program, target_mesh, target_sdf, sketcher,
 
         if AlgConf.SEMANTIC_LOSS:
             # create / fetch semantic points and labels
-            sem_points, sem_points_labels, n_sem_classes = create_semantic_points_and_labels(target_mesh, sketcher)
+            sem_points, sem_points_labels, n_sem_classes = create_semantic_points_and_labels(original_mesh, original_annotations, sketcher)
             extra_kwargs["sem_points"] = sem_points
             extra_kwargs["sem_points_labels"] = sem_points_labels
             extra_kwargs["n_sem_classes"] = n_sem_classes
@@ -103,7 +105,7 @@ def optimize_primitive_assembly(in_program, target_mesh, target_sdf, sketcher,
         out_program = run_optimization_loop_fast(
             init_opt_program=opt_program,
             target_mesh=target_mesh,
-            target=target_sdf,
+            in_target=target_sdf,
             sketcher=sketcher,
             #
             variable_list=variable_list,
@@ -132,10 +134,32 @@ def optimize_primitive_assembly(in_program, target_mesh, target_sdf, sketcher,
     return out_program
 
 
-def create_semantic_points_and_labels(target_mesh, sketcher):
-    # create semantic points and labels
-    sem_points = quick_sample_points(target_mesh, sketcher, n_points=100_000)
-    sem_points_labels = (sem_points[..., 2] < 0.0).float()  
-    n_classes = len(sem_points_labels.unique())
-    # sem_points_labels = th.nn.functional.one_hot(sem_points_labels.long(), num_classes=n_classes).float()
+def create_semantic_points_and_labels(original_mesh, original_annotations, sketcher):
+    """
+    Sample 3D points on the origin mesh surface and assign semantic labels from
+    per-face annotations (e.g. instance_id per face).
+
+    Args:
+        origin_mesh: trimesh.Trimesh to sample on.
+        original_annotations: (n_faces,) array — label/instance_id per face (numpy or torch).
+        sketcher: used for device placement.
+
+    Returns:
+        sem_points: (n_points, 3) tensor on sketcher.device.
+        sem_points_labels: (n_points,) tensor of integer class indices.
+        n_classes: number of unique labels (for one-hot / loss).
+    """
+    n_points = 100_000
+    # Sample points on the surface and get the face index for each point
+    points_np, face_indices_np = trimesh.sample.sample_surface(original_mesh, n_points)
+    # Map face index -> label from annotations
+    if hasattr(original_annotations, "numpy"):
+        ann_np = original_annotations.numpy()
+    else:
+        ann_np = np.asarray(original_annotations, dtype=np.int64)
+    labels_np = np.asarray(ann_np[face_indices_np], dtype=np.int64)
+    # Move to torch on the same device as the rest of the optimization
+    sem_points = th.from_numpy(points_np).float().to(sketcher.device)
+    sem_points_labels = th.from_numpy(labels_np).long().to(sketcher.device)
+    n_classes = int(sem_points_labels.max().item()) + 1
     return sem_points, sem_points_labels, n_classes

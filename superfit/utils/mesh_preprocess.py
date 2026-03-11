@@ -7,7 +7,10 @@ from .mesh_sdf import renorm_target_sdf, get_target_cubvh, sdf_to_mesh
 from .constants import MIN_VOLUME_LIMIT
 from .logger import logger
 import cc3d
+import igl
+import cubvh
 
+P_INSIDE_THRESHOLD = 0.25
 CD_THRESHOLD = 0.001
 INFATE_AMOUNT = 0.02
 
@@ -121,6 +124,28 @@ def normalize_to_unit_cube(mesh: trimesh.Trimesh, margin=0.9):
 
     mesh.apply_transform(T)
     return mesh
+
+
+def normalize_to_unit_cube_with_transform(mesh: trimesh.Trimesh, margin=0.9):
+    """
+    Normalize mesh to fit within [-margin, margin]^3. Apply translation first, then scale.
+    Returns (mesh, translation, scale) where translation is the 3D offset applied first
+    (v' = scale * (v + translation)), and scale is the uniform scale factor.
+    Useful for partwise fitting so the transform can be saved and applied inversely later.
+    """
+    bmin, bmax = mesh.bounds
+    center = 0.5 * (bmin + bmax)
+    extent = bmax - bmin
+    max_extent = extent.max()
+    scale = (2 * margin) / max_extent
+    translation = -center  # applied first: v -> v + translation, then v -> scale * v
+    T = np.eye(4, dtype=np.float64)
+    T[:3, 3] = -center                  # move center to origin
+    T = np.dot(np.diag([scale, scale, scale, 1.0]), T)  # scale * translate
+    mesh = mesh.copy()
+    mesh.apply_transform(T)
+    return mesh, np.asarray(translation, dtype=np.float64), float(scale)
+
 
 def get_mask_scaled_aabb(points: th.Tensor,
                                   mesh: trimesh.Trimesh,
@@ -330,3 +355,64 @@ def cd_based_process_mesh_to_sdf(input_mesh_file, sketcher_3d, inflate=False, in
         return mesh_v2, target_sdf_v2, cd_avg
     else:
         return mesh_v1, target_sdf_v1, cd_avg
+
+
+def winding_to_p_inside_torch(w: th.Tensor, t: float = 0.15, sigma: float = 0.20, eps: float = 1e-6):
+    """
+    w: Tensor of winding numbers (any shape), float32/float64, CPU or CUDA
+    Returns:
+      p_inside in [0,1], same shape as w
+      conf in [0,1], same shape as w
+    """
+    a = w.abs()
+
+    # nearest integer without torch.rint:
+    # round(x) = floor(x + 0.5) for x>=0 (we use abs so it's >=0)
+    k = (a + 0.5).floor()
+
+    delta = (a - k).abs()
+
+    # membership: outside ~0, inside-ish ~1 once a>0.5
+    member = th.sigmoid((a - 0.5) / t)
+
+    # confidence: 1 near integers, ~0 for fractional ambiguous values
+    conf = th.exp(-0.5 * (delta / (sigma + eps)) ** 2)
+
+    p = (member * conf).clamp(0.0, 1.0)
+    return p, conf
+
+def mesh_with_segments_to_part_targets(mesh, instance_ids):
+    n_index = len(np.unique(instance_ids))
+    part_targets = []
+    for selected_index in range(n_index):
+
+        face_mask = (instance_ids == selected_index)
+        face_idx = np.nonzero(face_mask)[0]
+
+        # returns a single Trimesh when append=Tru4
+        new_mesh = mesh.submesh([face_idx], append=True, repair=False, only_watertight=False)
+
+        # optionally avoid trimesh "processing" changing things:
+        new_mesh.process(validate=True)
+        # make mesh both sided
+        part_targets.append(new_mesh)
+    return part_targets
+
+def open_mesh_to_closed_mesh(mesh, sketcher_3d):
+    coords = sketcher_3d.get_base_coords()
+    coords_np = coords.cpu().numpy()
+    # Winding Numbers:
+    V = np.asarray(mesh.vertices, dtype=np.float64, order="C")
+    F = np.asarray(mesh.faces, dtype=np.int32, order="C")
+    Q = np.asarray(coords_np, dtype=np.float64, order="C")
+    winding_number = igl.fast_winding_number(V, F, coords_np)
+    winding_th = th.from_numpy(winding_number).cuda()
+    p_inside, _ = winding_to_p_inside_torch(winding_th)
+
+    BVH = cubvh.cuBVH(mesh.vertices, mesh.faces) # build with numpy.ndarray/torch.Tensor
+    # BVH = cubvh.cuBVH(mesh_data.vertices, mesh_data.faces) # build with numpy.ndarray/torch.Tensor
+    distances, face_id, uvw = BVH.unsigned_distance(coords, return_uvw=False)
+
+    signed_distances = distances * -th.sign(p_inside-P_INSIDE_THRESHOLD).float()
+    new_mesh = sdf_to_mesh(signed_distances, sketcher_3d)
+    return new_mesh

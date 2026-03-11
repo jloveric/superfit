@@ -3,14 +3,15 @@ import argparse
 import traceback
 import torch as th
 import numpy as np
+import trimesh
 import _pickle as cPickle
 from geolipi.torch_compute import recursive_evaluate, Sketcher
 from superfit.algos.resfit import resfit
-from superfit.utils.mesh_preprocess import process_mesh_to_sdf, cd_based_process_mesh_to_sdf
+from superfit.utils.mesh_preprocess import process_mesh_to_sdf, cd_based_process_mesh_to_sdf, normalize_to_unit_cube
 from superfit.utils.config import AlgorithmConfig as AlgConf
 from superfit.utils.stats import Stats
 from superfit.utils.logger import logger
-from superfit.utils.constants import AOT_ARTIFACT_DIR, SAVE_DIR_BASE
+from superfit.utils.constants import AOT_ARTIFACT_DIR, SAVE_DIR_BASE, PARTOBJAVERSE_INSTANCE_DIR
 from superfit.utils.io import load_toy4k_mesh_paths, load_partobjaverse_mesh_paths
 import superfit.utils.config as config_options
 from superfit.utils.io import to_cpu_recursive
@@ -34,6 +35,15 @@ def parse_args():
     parser.add_argument("--aot_postfix", type=str, default="aott", help="AOT postfix")
     return parser.parse_args()
 
+def load_partobjaverse_annotations(input_mesh_file):
+    original_mesh = trimesh.load(input_mesh_file, process=False)
+    if isinstance(original_mesh, trimesh.Scene):
+        original_mesh = original_mesh.dump(concatenate=True)
+    original_mesh = normalize_to_unit_cube(original_mesh)
+    mesh_name = os.path.basename(input_mesh_file).split("/")[-1].split(".")[0]
+    instance_id_path = os.path.join(PARTOBJAVERSE_INSTANCE_DIR, f"{mesh_name}.npy")
+    original_annotations = np.load(instance_id_path)
+    return original_mesh, original_annotations
 
 def shape_wise_resfit(input_mesh_file, save_dir, fastmode, ablation):
     """Process a single mesh file with resfit algorithm."""
@@ -60,8 +70,13 @@ def shape_wise_resfit(input_mesh_file, save_dir, fastmode, ablation):
     Stats.reset()
     Stats.record("input_mesh_file", input_mesh_file)
     # inner_save_file = os.path.join(save_dir, "stepwise.pkl")
+    if AlgConf.SEMANTIC_LOSS:
+        original_mesh, original_annotations = load_partobjaverse_annotations(input_mesh_file)
+    else:
+        original_mesh = None
+        original_annotations = None
     with Stats.timer("resfit_total"):
-        resfit(mesh)
+        resfit(mesh, original_mesh=original_mesh, original_annotations=original_annotations)
     cPickle.dump(to_cpu_recursive(Stats.get_dict()), open(save_file, "wb"))
     logger.info(f"Saved to {save_file}")
 

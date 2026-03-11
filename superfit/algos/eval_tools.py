@@ -31,6 +31,9 @@ from .kmeans import primitive_semantic_nmi_fast
 RESOLUTIONS = [128,]
 CD_RES = 2048
 CD_MULTIPLIER = 100.0
+# Dilated IOU for avoiding thin parts. 
+VOX_IOU_DILATE_THRESHOLD = 0.05
+MIX_IOU_RATIO = 0.15
 
 class MeasurePack:
 
@@ -305,7 +308,7 @@ def get_recon_measure(in_expr, sketcher, measure_pack: MeasurePack, convert_to_s
     elif measure == "surface_iou_wt_curvature":
         if measure_pack.target_surface_pc is None:
             BVH = cubvh.cuBVH(target_mesh.vertices, target_mesh.faces)
-            surface_sampled_points, curvature_weights = get_points_and_weights(target_mesh, sketcher, n_points=AlgConf.N_SURFACE_POINTS_EVAL)
+            surface_sampled_points, curvature_weights, _ = get_points_and_weights(target_mesh, sketcher, n_points=AlgConf.N_SURFACE_POINTS_EVAL)
             curvature_weights = AlgConf.CURVATURE_WEIGHTS_SCALE * curvature_weights
 
             perturbations = (th.rand_like(surface_sampled_points)  - 0.5) * AlgConf.SURFACE_ADJ_PERTURBATION_SCALE
@@ -327,11 +330,11 @@ def get_recon_measure(in_expr, sketcher, measure_pack: MeasurePack, convert_to_s
         output_sdf = recursive_evaluate(in_expr, sketcher, coords=surface_adj_points)
 
     elif measure == "surface_iou_wt_curvature_and_vox_iou":
-        vox_target_occ = (target_sdf <= 0.0)
+        vox_target_occ = (target_sdf <= VOX_IOU_DILATE_THRESHOLD)
         vox_target_occ = vox_target_occ[None, ...]
         if measure_pack.target_surface_pc is None:
             BVH = cubvh.cuBVH(target_mesh.vertices, target_mesh.faces)
-            surface_sampled_points, curvature_weights = get_points_and_weights(target_mesh, sketcher, n_points=AlgConf.N_SURFACE_POINTS_EVAL)
+            surface_sampled_points, curvature_weights, _ = get_points_and_weights(target_mesh, sketcher, n_points=AlgConf.N_SURFACE_POINTS_EVAL)
             curvature_weights = AlgConf.CURVATURE_WEIGHTS_SCALE * curvature_weights
 
             perturbations = (th.rand_like(surface_sampled_points)  - 0.5) * AlgConf.SURFACE_ADJ_PERTURBATION_SCALE
@@ -369,10 +372,10 @@ def get_recon_measure(in_expr, sketcher, measure_pack: MeasurePack, convert_to_s
         out_measure = get_curvature_aware_iou(hard_output, target_occ, curvature_weights=curvature_weights)
     elif measure == "surface_iou_wt_curvature_and_vox_iou":
         pt_hard_output = (pt_output_sdf <= 0.0)
-        vox_hard_output = (output_sdf <= 0.0)
+        vox_hard_output = (output_sdf <= VOX_IOU_DILATE_THRESHOLD)
         out_measure_1 = get_curvature_aware_iou(pt_hard_output, pt_target_occ, curvature_weights=curvature_weights)
         out_measure_2 = get_iou(vox_hard_output, vox_target_occ)
-        measure = (out_measure_1 + out_measure_2) / 2.0
+        out_measure = out_measure_1 * (1-MIX_IOU_RATIO) + out_measure_2 * MIX_IOU_RATIO
     elif measure == "cd":
         try:
             out_measure = get_cd_measure(output_sdf, target_pc, sketcher)
@@ -394,6 +397,8 @@ def get_recon_measure_packed(expr_set, sketcher, measure_pack: MeasurePack):
     reset_eval_seeds()
 
     all_execs = []
+    pt_all_execs = None
+    pt_target_sdf = None
     target_mesh = measure_pack.target_mesh
     if measure_pack.measure in ["surface_iou", "surface_tversky"]:
         if measure_pack.target_surface_pc is None:
@@ -418,7 +423,7 @@ def get_recon_measure_packed(expr_set, sketcher, measure_pack: MeasurePack):
     elif measure_pack.measure == "surface_iou_wt_curvature":
         if measure_pack.target_surface_pc is None:
             BVH = cubvh.cuBVH(target_mesh.vertices, target_mesh.faces)
-            surface_sampled_points, curvature_weights = get_points_and_weights(target_mesh, sketcher, n_points=AlgConf.N_SURFACE_POINTS_EVAL)
+            surface_sampled_points, curvature_weights, _ = get_points_and_weights(target_mesh, sketcher, n_points=AlgConf.N_SURFACE_POINTS_EVAL)
             curvature_weights = AlgConf.CURVATURE_WEIGHTS_SCALE * curvature_weights
 
             perturbations = (th.rand_like(surface_sampled_points)  - 0.5) * AlgConf.SURFACE_ADJ_PERTURBATION_SCALE
@@ -444,7 +449,7 @@ def get_recon_measure_packed(expr_set, sketcher, measure_pack: MeasurePack):
 
         if measure_pack.target_surface_pc is None:
             BVH = cubvh.cuBVH(target_mesh.vertices, target_mesh.faces)
-            surface_sampled_points, curvature_weights = get_points_and_weights(target_mesh, sketcher, n_points=AlgConf.N_SURFACE_POINTS_EVAL)
+            surface_sampled_points, curvature_weights, _ = get_points_and_weights(target_mesh, sketcher, n_points=AlgConf.N_SURFACE_POINTS_EVAL)
             curvature_weights = AlgConf.CURVATURE_WEIGHTS_SCALE * curvature_weights
 
             perturbations = (th.rand_like(surface_sampled_points)  - 0.5) * AlgConf.SURFACE_ADJ_PERTURBATION_SCALE
@@ -452,24 +457,28 @@ def get_recon_measure_packed(expr_set, sketcher, measure_pack: MeasurePack):
             # surface_sampled_sdf = recompute_sdf_from_BVH(surface_adj_points, BVH, mode="watertight")
             measure_pack.target_surface_pc = surface_adj_points
 
-            target_sdf, _, _ = BVH.signed_distance(surface_adj_points, return_uvw=False, mode="watertight")
-            target_occ = (target_sdf <= 0.0)
+            pt_target_sdf, _, _ = BVH.signed_distance(surface_adj_points, return_uvw=False, mode="watertight")
+            target_occ = (pt_target_sdf <= 0.0)
             measure_pack.pt_target_occ = target_occ
             measure_pack.curvature_weights = curvature_weights
-            measure_pack.pt_target_sdf = target_sdf
+            measure_pack.pt_target_sdf = pt_target_sdf
         else:
             surface_adj_points = measure_pack.target_surface_pc
             target_occ = measure_pack.pt_target_occ
             curvature_weights = measure_pack.curvature_weights
-            target_sdf = measure_pack.pt_target_sdf
-        all_pt_execs = []
+            pt_target_sdf = measure_pack.pt_target_sdf
+
+        pt_all_execs = []
         for expr in expr_set:
             cur_exec = recursive_evaluate(expr.tensor(dtype=sketcher.dtype), sketcher, coords=surface_adj_points)
-            all_pt_execs.append(cur_exec)
+            pt_all_execs.append(cur_exec)
+        
+        pt_all_execs = th.stack(pt_all_execs, dim=0)
         
         for expr in expr_set:
             cur_exec = recursive_evaluate(expr.tensor(dtype=sketcher.dtype), sketcher, relaxed_eval=False)
             all_execs.append(cur_exec)
+        target_sdf = measure_pack.target_sdf
         
     else:
         for expr in expr_set:
@@ -478,9 +487,10 @@ def get_recon_measure_packed(expr_set, sketcher, measure_pack: MeasurePack):
         target_sdf = measure_pack.target_sdf
     all_execs = th.stack(all_execs, dim=0)
     measure = measure_pack.measure
-    return get_recon_measure_set(all_execs, sketcher, target_mesh,  target_sdf, curvature_weights=measure_pack.curvature_weights, measure=measure)
+    return get_recon_measure_set(all_execs, sketcher, target_mesh,  target_sdf, curvature_weights=measure_pack.curvature_weights, measure=measure,
+                                pt_output_sdfs=pt_all_execs, pt_target_sdf=pt_target_sdf)
 
-def get_recon_measure_set(output_sdfs, sketcher, target_mesh, target_sdf,curvature_weights=None, measure="iou"):
+def get_recon_measure_set(output_sdfs, sketcher, target_mesh, target_sdf, curvature_weights=None, measure="iou", pt_output_sdfs=None, pt_target_sdf=None):
     # Generate required targets
     target_occ, target_pc = None, None
     if measure in ["iou", "tversky"]:
@@ -511,6 +521,15 @@ def get_recon_measure_set(output_sdfs, sketcher, target_mesh, target_sdf,curvatu
     elif measure == "surface_iou_wt_curvature":
         hard_output = (output_sdfs.detach() <= 0.0)
         output = get_curvature_aware_iou_set(hard_output, target_occ, curvature_weights=curvature_weights)
+    elif measure == "surface_iou_wt_curvature_and_vox_iou":
+        hard_output = (output_sdfs.detach() <= VOX_IOU_DILATE_THRESHOLD)
+        target_occ = (target_sdf <= VOX_IOU_DILATE_THRESHOLD)
+        pt_hard_output = (pt_output_sdfs.detach() <= 0.0)
+        pt_target_occ = (pt_target_sdf <= 0.0)
+        output_1 = get_curvature_aware_iou_set(pt_hard_output, pt_target_occ, curvature_weights=curvature_weights)
+        output_2 = get_iou_set(hard_output, target_occ)
+        output = output_1 * (1-MIX_IOU_RATIO) + output_2 * MIX_IOU_RATIO
+
     elif measure == "cd":
         output = get_cd_measure_set(output_sdfs, target_pc, sketcher)
     elif measure == "iqr_hausdorff":

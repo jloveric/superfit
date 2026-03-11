@@ -6,7 +6,7 @@ from PIL import Image
 import superfit.symbolic as sps
 from sysl.utils import recursive_sm_to_smg, recursive_gls_to_sysl
 from sysl.shader import evaluate_to_shader
-from sysl.utils import frames_to_animation
+from geolipi.utils import frames_to_animation
 from sysl.shader_runtime.offline_render import render_multipass
 from superfit.optim.primitive_registry import HANDLER_REGISTRY
 from superfit.optim.expr_conversion import convert_to_unbatched, convert_to_unpacked

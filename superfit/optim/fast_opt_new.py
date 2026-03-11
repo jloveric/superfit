@@ -7,32 +7,53 @@ import cubvh
 from collections import defaultdict
 from .param_conversion import params_from_variables
 from ..symbolic.utils import gather_primitives
+from ..symbolic.symbolic_types import VALID_BATCHED_STOCHASTIC_SU_CLASSES
 from ..utils.config import AlgorithmConfig as AlgConf
 from ..utils.stats import Stats
 from ..utils.logger import logger
-from ..utils.mesh_sdf import sdf_to_mesh
-from .utils import (perform_batched_stochastic_precondition, exponential_temperature_schedule, 
+from ..utils.mesh_sdf import sdf_to_mesh_mod_sketcher, get_target_cubvh
+from .utils import (perform_batched_stochastic_precondition, exponential_temperature_schedule,
+                    perform_batched_stochastic_precondition_with_curvature, 
                     recompute_sdf_from_BVH, get_mask_scaled_aabb, quick_sample_points)
-from .curvature import get_points_and_weights
+from .curvature import get_points_and_weights, get_curvature_weights_for_points
 from .measures import get_iou
 from .main_opt import make_optimizer, get_scale_factor
 from .compile_function import CompiledOps
 from .losses import compute_reflection_loss, compute_semantic_loss
 
 SMU_K = 0.05
+def set_bounds_from_mesh(target_mesh, sketcher):
+    bounds = target_mesh.bounds
+    bounds = np.array(bounds)
 
-def run_optimization_loop_fast(init_opt_program, target_mesh, target, sketcher, 
+    scale = tuple((bounds[1, i] - bounds[0, i]) / 2.0 for i in range(sketcher.n_dims))
+    max_scale = max(scale) * 1/0.95
+    scale = (max_scale, max_scale, max_scale)
+    origin = tuple((bounds[1, i] + bounds[0, i]) / 2.0 for i in range(sketcher.n_dims))
+    sketcher.adapt_coords(scale=scale, origin=origin)
+    return origin, max_scale
+
+def update_target(target_mesh, sketcher):
+    target = get_target_cubvh(target_mesh, sketcher, mode="watertight")
+    return target
+
+def reset_bounds(sketcher):
+    sketcher.reset_coords()
+
+def run_optimization_loop_fast(init_opt_program, target_mesh, in_target, sketcher, 
                           variable_list, tensor_list, param_groups,
                           compiled_ops: CompiledOps = None, 
                           render_mode: bool = False, render_iter: int = 0,
                           post_prune: bool = False,
                           *args, **kwargs):
+    # set_bounds_from_mesh(target_mesh, sketcher)      
+    # Update Target:
+    # target = update_target(target_mesh, sketcher)
+    target = in_target
+
     ## Prelims
     opt_program = init_opt_program
-    has_temp = isinstance(opt_program, (sps.SuperFrustumPackedBatchedStochasticSU, 
-                                        sps.SolidSFPackedBatchedStochasticSU,
-                                        )
-                        )
+    has_temp = isinstance(opt_program, VALID_BATCHED_STOCHASTIC_SU_CLASSES)
 
     device = sketcher.device
     prim_params = opt_program.get_arg(0)
@@ -81,18 +102,23 @@ def run_optimization_loop_fast(init_opt_program, target_mesh, target, sketcher,
 
     ## Process Input:
     st = time.time()
-    surface_sampled_points, curvature_weights = get_points_and_weights(target_mesh, sketcher, n_points=AlgConf.N_SURFACE_POINTS)
+    surface_sampled_points, curvature_weights, C_multi = get_points_and_weights(target_mesh, sketcher, n_points=AlgConf.N_SURFACE_POINTS)
     curvature_weights = AlgConf.CURVATURE_WEIGHTS_SCALE * curvature_weights
 
     BVH = cubvh.cuBVH(target_mesh.vertices, target_mesh.faces)
-    
+
     # Pre-allocate base_coords once
     base_coords = sketcher.get_base_coords()
+    base_curvature_weights = get_curvature_weights_for_points(base_coords, BVH, target_mesh, C_vertex=C_multi)
+    base_curvature_weights = AlgConf.CURVATURE_WEIGHTS_SCALE * base_curvature_weights
     base_coords = base_coords.unsqueeze(0)#.expand(1, base_coords.shape[0], base_coords.shape[1])
 
     logger.debug(f"Creating BVH: {time.time() - st:.3f}s")
     if target_mask is not None:
         base_coords = base_coords[:, target_mask, :]
+        base_curvature_weights = base_curvature_weights[target_mask]
+        joint_curvature_weights = th.cat([base_curvature_weights, curvature_weights, curvature_weights], dim=0)
+        jc_weights_ext = joint_curvature_weights.unsqueeze(0).unsqueeze(2)
 
     # Pre-compute size for base_coords
     base_coords_size = base_coords.shape[1]
@@ -167,12 +193,13 @@ def run_optimization_loop_fast(init_opt_program, target_mesh, target, sketcher,
                 print("Sampling on pred mesh")
                 with th.no_grad():
                     _, full_output_sdf = compiled_ops.compiled_assembly_execution(sketcher.get_base_coords().unsqueeze(0), transformed_params)
-                    pred_mesh = sdf_to_mesh(full_output_sdf[0].detach(), sketcher)
+                    pred_mesh = sdf_to_mesh_mod_sketcher(full_output_sdf[0].detach(), sketcher)
                 n_orig_points = int(surface_adj_points.shape[0] * AlgConf.BIDIR_SAMPLE_RATIO) 
                 n_new_points = surface_adj_points.shape[0] - n_orig_points
-                _pred_sampled_points = quick_sample_points(pred_mesh, sketcher, n_points=n_new_points)
-                _pred_sampled_points = _pred_sampled_points + perturbations[n_orig_points:]
-                surface_adj_points = th.cat([surface_adj_points[:n_orig_points], _pred_sampled_points], dim=0)
+                if not pred_mesh.vertices.shape[0] == 0:
+                    _pred_sampled_points = quick_sample_points(pred_mesh, sketcher, n_points=n_new_points)
+                    _pred_sampled_points = _pred_sampled_points + perturbations[n_orig_points:]
+                    surface_adj_points = th.cat([surface_adj_points[:n_orig_points], _pred_sampled_points], dim=0)
 
 
             surface_sampled_sdf = recompute_sdf_from_BVH(surface_adj_points, BVH, mode="watertight")
@@ -197,7 +224,8 @@ def run_optimization_loop_fast(init_opt_program, target_mesh, target, sketcher,
         
         # Stochastic preconditioning
         if i < stochastic_precondition_n_iters:
-            all_coords = perform_batched_stochastic_precondition(all_coords, i-decay_start_iter, stochastic_precondition_n_iters, AlgConf.STOCHASTIC_PRECONDITION_INIT_VAL_LOWER)
+            # all_coords = perform_batched_stochastic_precondition(all_coords, i-decay_start_iter, stochastic_precondition_n_iters, AlgConf.STOCHASTIC_PRECONDITION_INIT_VAL_LOWER)
+            all_coords = perform_batched_stochastic_precondition_with_curvature(all_coords, i-decay_start_iter, stochastic_precondition_n_iters, AlgConf.STOCHASTIC_PRECONDITION_INIT_VAL_LOWER, jc_weights_ext)
             
         ## MAIN FORWARD
         primitive_sdfs, output_sdf = compiled_ops.compiled_assembly_execution(all_coords, transformed_params)
@@ -243,7 +271,7 @@ def run_optimization_loop_fast(init_opt_program, target_mesh, target, sketcher,
                                                 primitive_sdfs, output_sdf, 
                                                 mask_shape, mask_surface, mask_surface_adj,
                                                 transformed_params, 
-                                                scale_factor, curvature_weights)
+                                                scale_factor, curvature_weights, base_curvature_weights)
         
         if AlgConf.TVERSKY_MODE:
             alpha = min((i - decay_start_iter) / (base_iters), 1.0) ** 2
@@ -259,7 +287,7 @@ def run_optimization_loop_fast(init_opt_program, target_mesh, target, sketcher,
             # First gather points. 
             point_soft_assoc, sem_output_sdf = compiled_ops.point2prim_soft(sem_points, transformed_params, smu_k=SMU_K, scale_factor=scale_factor)
 
-            sem_mask = (sem_output_sdf[0] <= AlgConf.LOSS_BAND)# .float()
+            sem_mask = (sem_output_sdf[0] <= AlgConf.LOSS_BAND / 5.0)# .float()
             n_points = sem_mask.sum().item()
             if n_points == 0:
                 continue
@@ -267,7 +295,8 @@ def run_optimization_loop_fast(init_opt_program, target_mesh, target, sketcher,
             total_loss = total_loss + semantic_loss * AlgConf.SEMANTIC_LOSS_ALPHA
         
         if AlgConf.LOSS_SURFACE_ADJ_SDF:
-            surf_adj_sdf_delta = (output_surface_adj_sdf - surface_sampled_sdf) ** 2
+            # surf_adj_sdf_delta = (output_surface_adj_sdf - surface_sampled_sdf) ** 2
+            surf_adj_sdf_delta = (th.abs(output_surface_adj_sdf) - th.abs(surface_sampled_sdf)) ** 2
             surf_adj_sdf_delta = surf_adj_sdf_delta * (1 + curvature_weights)
             mask_surface_adj_sum = mask_surface_adj.sum()
             loss_surface_adj_sdf = 0.5 * (mask_surface_adj * surf_adj_sdf_delta).sum() / (mask_surface_adj_sum + 1e-8)
@@ -378,6 +407,7 @@ def run_optimization_loop_fast(init_opt_program, target_mesh, target, sketcher,
         for pos, param in render_params.items():
             render_params[pos] = th.stack(param)
         Stats.record("render_params", render_params, log=False)
+    # reset_bounds(sketcher)
     return best_program
 
 

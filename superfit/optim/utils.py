@@ -203,3 +203,14 @@ def perform_batched_stochastic_precondition(base_coords, i, base_iters, init_val
     base_coords = base_coords + noise
     return base_coords
 
+
+def perform_batched_stochastic_precondition_with_curvature(base_coords, i, base_iters, init_value, curvature_weights):
+    final_val = 0
+    frac = min(i / (base_iters), 1.0)
+    alpha = init_value * (1 - frac) + final_val * frac
+    # More efficient noise generation
+    max_value = max(th.max(curvature_weights), 1.0)
+    noise = th.randn_like(base_coords) * alpha * (max_value - curvature_weights)
+    base_coords = base_coords + noise
+    return base_coords
+

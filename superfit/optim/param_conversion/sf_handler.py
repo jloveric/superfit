@@ -60,110 +60,112 @@ def unpack_params_sf(params):
     return size, roundness, dilate_3d, scale, bulge_ratio, onion_ratio
 
 # Custom function for param match:
+def make_point2prim_distr_hard(batch_call_function):
+    def point2prim_distr_hard(coords, all_params):
+        params, su_vals, logits, temperature = all_params 
+        outputs = batch_call_function(coords, params)
+        g = sample_gumbel(logits.shape, device=logits.device, dtype=logits.dtype)
+        w  = th.softmax((logits + g) / temperature, dim=-1)  # (..., 2)
 
-def point2prim_hard(coords, all_params):
-    # B, N
-    params, su_vals, logits, temperature = all_params 
-    outputs = batched_sf_packed_eval(coords, params)
-    g = sample_gumbel(logits.shape, device=logits.device, dtype=logits.dtype)
-    w  = th.softmax((logits + g) / temperature, dim=-1)  # (..., 2)
+        # Unpack weights explicitly
+        w0 = w[:, 0:1]
+        w1 = w[:, 1:2]
 
-    # Unpack weights explicitly
-    w0 = w[:, 0:1]
-    w1 = w[:, 1:2]
+        # Equivalent to weighted sum of [outputs, 1.0]
+        primitive_sdfs = outputs * w0 + w1
 
-    # Equivalent to weighted sum of [outputs, 1.0]
-    primitive_sdfs = outputs * w0 + w1
+        K = primitive_sdfs.shape[0]
 
-    K = primitive_sdfs.shape[0]
+        prim_with_ids = []
+        for i in range(K):
+            ind_field = th.zeros_like(primitive_sdfs[i]) + i
+            updated_prim = th.stack([primitive_sdfs[i], ind_field], dim=-1)
+            prim_with_ids.append(updated_prim)
 
-    prim_with_ids = []
-    for i in range(K):
-        ind_field = th.zeros_like(primitive_sdfs[i]) + i
-        updated_prim = th.stack([primitive_sdfs[i], ind_field], dim=-1)
-        prim_with_ids.append(updated_prim)
-
-    out = prim_with_ids[0]
-    for i in range(1, K):
-        k_reshaped = su_vals[i-1].unsqueeze(-1)
-        out = sdf_geom_only_smooth_union(out, prim_with_ids[i], k_reshaped)
+        out = prim_with_ids[0]
+        for i in range(1, K):
+            k_reshaped = su_vals[i-1].unsqueeze(-1)
+            out = sdf_geom_only_smooth_union(out, prim_with_ids[i], k_reshaped)
+        
+        return out
+    return point2prim_distr_hard
     
-    return out
+def make_point2prim_distr_soft(batch_call_function):
+    def point2prim_soft_distance(coords, all_params):
+        # B, N
+        params, su_vals, logits, temperature = all_params 
+        outputs = batch_call_function(coords, params)
+        g = sample_gumbel(logits.shape, device=logits.device, dtype=logits.dtype)
+        w  = th.softmax((logits + g) / temperature, dim=-1)  # (..., 2)
 
+        # Unpack weights explicitly
+        w0 = w[..., 0:1]
+        w1 = w[..., 1:2]
 
-def point2prim_soft_distance(coords, all_params):
-    # B, N
-    params, su_vals, logits, temperature = all_params 
-    outputs = batched_sf_packed_eval(coords, params)
-    g = sample_gumbel(logits.shape, device=logits.device, dtype=logits.dtype)
-    w  = th.softmax((logits + g) / temperature, dim=-1)  # (..., 2)
+        # Equivalent to weighted sum of [outputs, 1.0]
+        primitive_sdfs = outputs * w0 + w1
 
-    # Unpack weights explicitly
-    w0 = w[..., 0:1]
-    w1 = w[..., 1:2]
+        # Shape: B, N
+        tau = temperature ** 2.0
+        K = primitive_sdfs.shape[0]
+        # Do a distance based point association:
+        logits = -primitive_sdfs.T / tau
+        logits = logits - logits.max(dim=-1, keepdim=True).values  # stability
+        probs = th.softmax(logits, dim=-1)
 
-    # Equivalent to weighted sum of [outputs, 1.0]
-    primitive_sdfs = outputs * w0 + w1
+        out = primitive_sdfs[0]
+        for i in range(1, K):
+            k_reshaped = su_vals[i-1].unsqueeze(-1)
+            out = _sdf_smooth_union_pair(out, primitive_sdfs[i], k_reshaped)
 
-    # Shape: B, N
-    tau = temperature ** 2.0
-    K = primitive_sdfs.shape[0]
-    # Do a distance based point association:
-    logits = -primitive_sdfs.T / tau
-    logits = logits - logits.max(dim=-1, keepdim=True).values  # stability
-    probs = th.softmax(logits, dim=-1)
+        return probs, out
+    return point2prim_soft_distance
 
-    out = primitive_sdfs[0]
-    for i in range(1, K):
-        k_reshaped = su_vals[i-1].unsqueeze(-1)
-        out = _sdf_smooth_union_pair(out, primitive_sdfs[i], k_reshaped)
+def make_point2prim_distr_smu(batch_call_function):
+    def point2prim_soft_smu(coords, all_params, smu_k=0.01, scale_factor=1.0):
+        # B, N
+        params, su_vals, logits, temperature = all_params 
+        outputs = batched_sf_packed_eval(coords, params)
+        g = sample_gumbel(logits.shape, device=logits.device, dtype=logits.dtype)
+        w  = th.softmax((logits + g) / temperature, dim=-1)  # (..., 2)
 
-    return probs, out
+        # Unpack weights explicitly
+        w0 = w[..., 0:1]
+        w1 = w[..., 1:2]
 
+        # Equivalent to weighted sum of [outputs, 1.0]
+        primitive_sdfs = outputs * w0 + w1
 
-def point2prim_soft_smu(coords, all_params, smu_k=0.01, scale_factor=1.0):
-    # B, N
-    params, su_vals, logits, temperature = all_params 
-    outputs = batched_sf_packed_eval(coords, params)
-    g = sample_gumbel(logits.shape, device=logits.device, dtype=logits.dtype)
-    w  = th.softmax((logits + g) / temperature, dim=-1)  # (..., 2)
+        # Shape: B, N
+        # tau = temperature ** 2.0
+        K = primitive_sdfs.shape[0]
+        # Do a distance based point association:
+        # probs = th.softmax(logits, dim=-1)
 
-    # Unpack weights explicitly
-    w0 = w[..., 0:1]
-    w1 = w[..., 1:2]
+        out = primitive_sdfs[0]
+        empty_distr = th.zeros((primitive_sdfs.shape[1], K+1)).to(primitive_sdfs.device).float()
+        # Add the last one
+        cur_distr = empty_distr.clone()
+        cur_distr[:, 0] = 1.0
+        for i in range(1, K):
+            k_reshaped = su_vals[i-1].unsqueeze(-1)
+            var_a, var_b = out, primitive_sdfs[i]
+            h = th.clamp(0.5 + 0.5 * (var_b - var_a) / (k_reshaped + EPSILON), min=0.0, max=1.0)
+            out = mix(var_b, var_a, h) - k_reshaped * h * (1.0 - h);
 
-    # Equivalent to weighted sum of [outputs, 1.0]
-    primitive_sdfs = outputs * w0 + w1
+            h_2 = th.clamp(0.5 + 0.5 * (var_b- var_a) / (smu_k + EPSILON), min=0.0, max=1.0)
+            h_2 = h_2.squeeze().unsqueeze(-1)
+            new_distr = empty_distr.clone()
+            new_distr[:, i] = 1.0
+            # out = _sdf_smooth_union_pair(out, primitive_sdfs[i], k_reshaped)
+            cur_distr = mix(new_distr, cur_distr, h_2)
+        
+        output_tanh = th.tanh(out * scale_factor)
+        output_for_occ_occ = th.sigmoid(-output_tanh * scale_factor)
+        cur_distr[:, -1] = 1.0 - output_for_occ_occ * 1.0
 
-    # Shape: B, N
-    # tau = temperature ** 2.0
-    K = primitive_sdfs.shape[0]
-    # Do a distance based point association:
-    # probs = th.softmax(logits, dim=-1)
-
-    out = primitive_sdfs[0]
-    empty_distr = th.zeros((primitive_sdfs.shape[1], K+1)).to(primitive_sdfs.device).float()
-    # Add the last one
-    cur_distr = empty_distr.clone()
-    cur_distr[:, 0] = 1.0
-    for i in range(1, K):
-        k_reshaped = su_vals[i-1].unsqueeze(-1)
-        var_a, var_b = out, primitive_sdfs[i]
-        h = th.clamp(0.5 + 0.5 * (var_b - var_a) / (k_reshaped + EPSILON), min=0.0, max=1.0)
-        out = mix(var_b, var_a, h) - k_reshaped * h * (1.0 - h);
-
-        h_2 = th.clamp(0.5 + 0.5 * (var_b- var_a) / (smu_k + EPSILON), min=0.0, max=1.0)
-        h_2 = h_2.squeeze().unsqueeze(-1)
-        new_distr = empty_distr.clone()
-        new_distr[:, i] = 1.0
-        # out = _sdf_smooth_union_pair(out, primitive_sdfs[i], k_reshaped)
-        cur_distr = mix(new_distr, cur_distr, h_2)
-    
-    output_tanh = th.tanh(out * scale_factor)
-    output_for_occ_occ = th.sigmoid(-output_tanh * scale_factor)
-    cur_distr[:, -1] = 1.0 - output_for_occ_occ * 1.0
-
-    return cur_distr, out
+        return cur_distr, out
+    return point2prim_soft_smu
 
 @register_handler
 class SFHandler(PrimitiveHandler):
@@ -180,8 +182,8 @@ class SFHandler(PrimitiveHandler):
     var_to_param = var_to_param_sf
     param_from_variables_fast = _params_from_variables_fast_sf
     batched_eval_function = batched_sf_packed_stochastic_eval
-    point2prim_hard = point2prim_hard
-    point2prim_soft = point2prim_soft_smu
+    point2prim_hard = make_point2prim_distr_hard(batched_sf_packed_eval)
+    point2prim_soft = make_point2prim_distr_smu(batched_sf_packed_eval)
     PARAM_IND_TO_NAME = PARAM_IND_TO_NAME
     get_param_loss = get_param_loss_sf
 
@@ -240,8 +242,8 @@ class VarAxisSFHandler(PrimitiveHandler):
     var_to_param = var_to_param_ext_sf
     param_from_variables_fast = _ext_sf_param_from_variables_fast
     batched_eval_function = batched_varaxis_sf_packed_stochastic_eval
-    point2prim_hard = None
-    point2prim_soft = None
+    point2prim_hard = make_point2prim_distr_hard(batched_varaxis_sf_packed_stochastic_eval)
+    point2prim_soft = make_point2prim_distr_smu(batched_varaxis_sf_packed_stochastic_eval)
     reinit_params = reinit_params_varaxis_sf
     get_param_loss = get_param_loss_sf
 
@@ -261,7 +263,7 @@ class SolidSFHandler(PrimitiveHandler):
     var_to_param = var_to_param_ext_sf
     param_from_variables_fast = _ext_sf_param_from_variables_fast
     batched_eval_function = batched_solid_sf_packed_stochastic_eval
-    point2prim_hard = None
-    point2prim_soft = None
+    point2prim_hard = make_point2prim_distr_hard(batched_solid_sf_packed_stochastic_eval)
+    point2prim_soft = make_point2prim_distr_smu(batched_solid_sf_packed_stochastic_eval)
     reinit_params = reinit_params_solid_sf
     get_param_loss = get_param_loss_sf

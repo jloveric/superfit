@@ -24,6 +24,8 @@ from .eval_tools import eval_shape
 def resfit(target_mesh, 
     save_file=None,
     perform_eval=True,
+    original_mesh=None,
+    original_annotations=None,
     ):
 
     prune_sketcher = Sketcher(resolution=AlgConf.PRUNE_RESOLUTION, dtype=AlgConf.OPT_DTYPE, n_dims=3)
@@ -104,7 +106,9 @@ def resfit(target_mesh,
             with Stats.timer("optimization"):
                 measure_pack.target_sdf = target_sdf_opt
                 measure_pack.reset()
-                running_program = optimize_primitive_assembly(running_program.tensor(dtype=AlgConf.OPT_DTYPE), target_mesh, target_sdf_opt, optim_sketcher, measure_pack)
+                running_program = optimize_primitive_assembly(running_program.tensor(dtype=AlgConf.OPT_DTYPE), 
+                        target_mesh, target_sdf_opt, optim_sketcher, measure_pack,
+                        original_mesh=original_mesh, original_annotations=original_annotations)
             Stats.record("opt_program", running_program.sympy().state(), log=False)
             Stats.record("opt_recon_measure", Stats.get("optimization.end_recon_measure"))
             Stats.record("opt_n_prim", Stats.get("optimization.end_n_prim"))
@@ -231,7 +235,7 @@ def resfit(target_mesh,
                 break
         else:
             logger.info("Did not reach early stop condition")
-            logger.info("cur_iter: {cur_iter}, best_iter: {best_iter}")
+            logger.info(f"cur_iter: {cur_iter}, best_iter: {best_iter}")
         if AlgConf.RUN_LAST_OPT and last_run:
             logger.info("==================== Finished running last optimization ====================")
             break

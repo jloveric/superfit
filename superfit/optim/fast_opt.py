@@ -81,7 +81,7 @@ def run_optimization_loop_fast(init_opt_program, target_mesh, target, sketcher,
 
     ## Process Input:
     st = time.time()
-    surface_sampled_points, curvature_weights = get_points_and_weights(target_mesh, sketcher, n_points=AlgConf.N_SURFACE_POINTS)
+    surface_sampled_points, curvature_weights, _ = get_points_and_weights(target_mesh, sketcher, n_points=AlgConf.N_SURFACE_POINTS)
     curvature_weights = AlgConf.CURVATURE_WEIGHTS_SCALE * curvature_weights
 
     BVH = cubvh.cuBVH(target_mesh.vertices, target_mesh.faces)

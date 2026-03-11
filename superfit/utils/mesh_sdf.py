@@ -50,6 +50,14 @@ def sdf_to_mesh(sdf, sketcher):
     out_mesh = trimesh.Trimesh(vertices=vertices_np, faces=faces_np, process=False)
     return out_mesh
 
+def sdf_to_mesh_mod_sketcher(sdf, sketcher):
+    out_mesh = sdf_to_mesh(sdf, sketcher)
+    # move and scale the mesh to the sketcher bounds
+    scale = sketcher.frame_scale.cpu().numpy()
+    origin = (sketcher.frame_origin).cpu().numpy()
+    out_mesh.apply_scale(scale)
+    out_mesh.apply_translation(origin)
+    return out_mesh
 
 def get_target_cubvh(mesh, sketcher, ensure_min_sdf=False, mode="raystab"):
     points = sketcher.get_base_coords()
