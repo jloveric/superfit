@@ -101,6 +101,19 @@ class SFSP(gls.Primitive3D):
         }
             
 @register_symbol
+class SPPSP(gls.Primitive3D):
+    """
+    SPPSP packed variable version for shader code generation.
+    """
+    @classmethod
+    def default_specs(cls):
+        return {
+            "size": {"type": "Vector[3]"},
+            "roundness": {"type": "Vector[4]"},
+            "doe": {"type": "Vector[4]"},
+        }
+        
+@register_symbol
 class SGSP(gls.Primitive3D):
     """
     SuperGeon packed variable version for shader code generation.

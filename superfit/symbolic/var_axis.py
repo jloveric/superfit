@@ -1,6 +1,6 @@
 import geolipi.symbolic as gls
 from geolipi.symbolic.registry import register_symbol
-from .primitives import (SuperFrustum, SuperQuadric, SPProto, SuperGeon, SFSP)
+from .primitives import (SuperFrustum, SuperQuadric, SPProto, SuperGeon, SFSP, SPPSP, SGSP)
 
 @register_symbol
 class VarAxisSF(gls.Primitive3D):
@@ -61,7 +61,7 @@ class VarAxisSQ(gls.Primitive3D):
     Variable Axis SuperQuadric - models SuperQuadric over 3 axes - X, Y, Z.
     """
     @classmethod
-    def default_spec(cls):
+    def default_specs(cls):
         return {"skew_vec": {"type": "Vector[3]"}, 
             "epsilon_1": {"type": "float", "min": 0.0}, 
             "epsilon_2": {"type": "float", "min": 0.0},
@@ -117,6 +117,23 @@ class SPProtoZ(SPProto):
     """
     SPProto over the Z Axis.
     """
+@register_symbol
+class SPPSPX(SPPSP):
+    """
+    SPPSP over the X Axis.
+    """
+
+@register_symbol
+class SPPSPY(SPPSP):
+    """
+    SPPSP over the Y Axis.
+    """
+
+@register_symbol
+class SPPSPZ(SPPSP):
+    """
+    SPPSP over the Z Axis.
+    """
 
 @register_symbol
 class VarAxisSG(gls.Primitive3D):
@@ -154,4 +171,20 @@ class SuperGeonY(SuperGeon):
 class SuperGeonZ(SuperGeon):
     """
     SuperGeon over the Z Axis.
+    """
+
+@register_symbol
+class SGSPX(SGSP):
+    """
+    SGSP over the X Axis.
+    """
+@register_symbol
+class SGSPY(SGSP):
+    """
+    SGSP over the Y Axis.
+    """
+@register_symbol
+class SGSPZ(SGSP):
+    """
+    SGSP over the Z Axis.
     """

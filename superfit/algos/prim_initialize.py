@@ -19,9 +19,9 @@ ROT2D_INIT_VAL = 0.5
 VARAXIS_INIT_VAL = AlgConf.DEFAULT_LOGITS_RESTART_VALUES[0]
 EXTRUSSION_INIT_VAL = 0.1
 
+# MAX_INIT_PROB = 0.95
 MAX_INIT_PROB = 0.95
 
-MIN_VOLUME_LIMIT = 0.0001
 
 def initialize_sp_prims(prim_params, sketcher):
     """
@@ -99,10 +99,9 @@ def initialize_sp_prims(prim_params, sketcher):
                             onion_amount, (EXTRUSSION_INIT_VAL, EXTRUSSION_INIT_VAL), init_logits)
     elif issubclass(version, sps.VarAxisSQ):
         init_logits = (VARAXIS_INIT_VAL, -VARAXIS_INIT_VAL, -VARAXIS_INIT_VAL)
-        skew_vec = prim_params.get("skew_vec", (SCALE_INIT_VAL, SCALE_INIT_VAL, SCALE_INIT_VAL))
-        epsilon_1 = prim_params.get("epsilon_1", (SMOOTH_INIT_VAL,))
-        epsilon_2 = prim_params.get("epsilon_2", (SMOOTH_INIT_VAL,))
-        primitive = version(skew_vec, epsilon_1, epsilon_2, init_logits)
+        epsilon_1 = prim_params.get("epsilon_1", (SCALE_INIT_VAL,))
+        epsilon_2 = prim_params.get("epsilon_2", (SCALE_INIT_VAL,))
+        primitive = version(scale, epsilon_1, epsilon_2, init_logits)
     else:
         raise ValueError(f"Unsupported version: {version}")
     primitive = gls.AxisAngleRotate3D(primitive, rotation)

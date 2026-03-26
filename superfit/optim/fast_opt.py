@@ -2,37 +2,38 @@
 import time
 import torch as th
 import numpy as np
-import geolipi.symbolic as gls
 import superfit.symbolic as sps
 import cubvh
 from collections import defaultdict
-import trimesh
-from geolipi.torch_compute import Sketcher
 from .param_conversion import params_from_variables
 from ..symbolic.utils import gather_primitives
+from ..symbolic.symbolic_types import VALID_BATCHED_STOCHASTIC_SU_CLASSES
 from ..utils.config import AlgorithmConfig as AlgConf
 from ..utils.stats import Stats
 from ..utils.logger import logger
-from ..utils.mesh_sdf import sdf_to_mesh
-from .utils import (perform_batched_stochastic_precondition, exponential_temperature_schedule, 
+from ..utils.mesh_sdf import sdf_to_mesh_mod_sketcher, get_target_cubvh
+from .utils import (perform_batched_stochastic_precondition, exponential_temperature_schedule,
+                    perform_batched_stochastic_precondition_with_curvature, 
                     recompute_sdf_from_BVH, get_mask_scaled_aabb, quick_sample_points)
-from .curvature import get_points_and_weights
+from .curvature import get_points_and_weights, get_curvature_weights_for_points
 from .measures import get_iou
-from .main_opt import make_optimizer, get_scale_factor
 from .compile_function import CompiledOps
+from .losses import compute_reflection_loss, compute_semantic_loss
 
-def run_optimization_loop_fast(init_opt_program, target_mesh, target, sketcher, 
+SMU_K = 0.05
+
+
+def run_optimization_loop_fast(init_opt_program, target_mesh, in_target, sketcher, 
                           variable_list, tensor_list, param_groups,
                           compiled_ops: CompiledOps = None, 
                           render_mode: bool = False, render_iter: int = 0,
                           post_prune: bool = False,
                           *args, **kwargs):
+    target = in_target
+
     ## Prelims
     opt_program = init_opt_program
-    has_temp = isinstance(opt_program, (sps.SuperFrustumPackedBatchedStochasticSU, 
-                                        sps.SolidSFPackedBatchedStochasticSU,
-                                        )
-                        )
+    has_temp = isinstance(opt_program, VALID_BATCHED_STOCHASTIC_SU_CLASSES)
 
     device = sketcher.device
     prim_params = opt_program.get_arg(0)
@@ -81,18 +82,29 @@ def run_optimization_loop_fast(init_opt_program, target_mesh, target, sketcher,
 
     ## Process Input:
     st = time.time()
-    surface_sampled_points, curvature_weights, _ = get_points_and_weights(target_mesh, sketcher, n_points=AlgConf.N_SURFACE_POINTS)
+    surface_sampled_points, curvature_weights, C_multi = get_points_and_weights(target_mesh, sketcher, n_points=AlgConf.N_SURFACE_POINTS)
     curvature_weights = AlgConf.CURVATURE_WEIGHTS_SCALE * curvature_weights
 
     BVH = cubvh.cuBVH(target_mesh.vertices, target_mesh.faces)
-    
+
     # Pre-allocate base_coords once
     base_coords = sketcher.get_base_coords()
+    base_curvature_weights = get_curvature_weights_for_points(base_coords, BVH, target_mesh, C_vertex=C_multi)
+    base_curvature_weights = AlgConf.CURVATURE_WEIGHTS_SCALE * base_curvature_weights
     base_coords = base_coords.unsqueeze(0)#.expand(1, base_coords.shape[0], base_coords.shape[1])
+
+    if not AlgConf.USE_CURVATURE_WEIGHTS:
+        curvature_weights = th.zeros_like(curvature_weights)
+        base_curvature_weights = th.zeros_like(base_curvature_weights)
+    if not AlgConf.INTERNAL_CURVATURE_WEIGHTS:
+        base_curvature_weights = th.zeros_like(base_curvature_weights)
 
     logger.debug(f"Creating BVH: {time.time() - st:.3f}s")
     if target_mask is not None:
         base_coords = base_coords[:, target_mask, :]
+        base_curvature_weights = base_curvature_weights[target_mask]
+    joint_curvature_weights = th.cat([base_curvature_weights, curvature_weights, curvature_weights], dim=0)
+    jc_weights_ext = joint_curvature_weights.unsqueeze(0).unsqueeze(2)
 
     # Pre-compute size for base_coords
     base_coords_size = base_coords.shape[1]
@@ -113,8 +125,6 @@ def run_optimization_loop_fast(init_opt_program, target_mesh, target, sketcher,
     batched_surface_sampled_points = surface_sampled_points.unsqueeze(0)# .expand(1, surface_sampled_points.shape[0], surface_sampled_points.shape[1])
     surface_sampled_points_size = surface_sampled_points.shape[0]
 
-    if AlgConf.BIDIR:
-        bidir_sketcher = Sketcher(resolution=AlgConf.BIDIR_RESOLUTION, n_dims=3)
     # Render Mode
     if render_mode:
         render_params = defaultdict(list)
@@ -123,6 +133,18 @@ def run_optimization_loop_fast(init_opt_program, target_mesh, target, sketcher,
         stochastic_precondition_n_iters = 0
         start_temp_decay = True
     
+    if AlgConf.SEMANTIC_LOSS:
+        sem_points, sem_points_labels = kwargs.get("sem_points", None), kwargs.get("sem_points_labels", None)
+        n_sem_classes = kwargs.get("n_sem_classes", None)
+
+    if AlgConf.TVERSKY_MODE:
+        pos_weight = AlgConf.TVERSKY_BETA * hard_target_fl           # for t(x) == 1
+        neg_weight = AlgConf.TVERSKY_ALPHA * (1 - hard_target_fl)    # for t(x) == 0
+        tversky_weights = pos_weight + neg_weight            # [N]
+    else:
+        tversky_weights = None
+        tversky_weights_surface_adj = None
+
     i = 0
     best_iter = 0
     while (i >= 0):
@@ -133,7 +155,7 @@ def run_optimization_loop_fast(init_opt_program, target_mesh, target, sketcher,
             variable.grad = None
 
         scale_factor = get_scale_factor(i, scale_factors)
-
+        
         if start_temp_decay:
             temperature = exponential_temperature_schedule(i-decay_start_iter, base_iters, max_temp, min_temp, device=device)
         else:
@@ -156,13 +178,15 @@ def run_optimization_loop_fast(init_opt_program, target_mesh, target, sketcher,
             if AlgConf.BIDIR and output_sdf is not None:
                 print("Sampling on pred mesh")
                 with th.no_grad():
-                    _, full_output_sdf = compiled_ops.compiled_assembly_execution(bidir_sketcher.get_base_coords().unsqueeze(0), transformed_params)
-                    pred_mesh = sdf_to_mesh(full_output_sdf[0].detach(), bidir_sketcher)
+                    _, full_output_sdf = compiled_ops.compiled_assembly_execution(sketcher.get_base_coords().unsqueeze(0), transformed_params)
+                    pred_mesh = sdf_to_mesh_mod_sketcher(full_output_sdf[0].detach(), sketcher)
                 n_orig_points = int(surface_adj_points.shape[0] * AlgConf.BIDIR_SAMPLE_RATIO) 
                 n_new_points = surface_adj_points.shape[0] - n_orig_points
-                _pred_sampled_points = quick_sample_points(pred_mesh, sketcher, n_points=n_new_points)
-                _pred_sampled_points = _pred_sampled_points + perturbations[n_orig_points:]
-                surface_adj_points = th.cat([surface_adj_points[:n_orig_points], _pred_sampled_points], dim=0)
+                if not pred_mesh.vertices.shape[0] == 0:
+                    _pred_sampled_points = quick_sample_points(pred_mesh, sketcher, n_points=n_new_points)
+                    _pred_sampled_points = _pred_sampled_points + perturbations[n_orig_points:]
+                    surface_adj_points = th.cat([surface_adj_points[:n_orig_points], _pred_sampled_points], dim=0)
+
 
             surface_sampled_sdf = recompute_sdf_from_BVH(surface_adj_points, BVH, mode="watertight")
             hard_target_surface_adj = (surface_sampled_sdf <= 0.0)
@@ -170,6 +194,11 @@ def run_optimization_loop_fast(init_opt_program, target_mesh, target, sketcher,
             # Pre-batch once
             batched_surface_adj_points = surface_adj_points.unsqueeze(0)# .expand(1, surface_adj_points.shape[0], surface_adj_points.shape[1])
             # TBD: Add points from Program Surface.
+            if AlgConf.TVERSKY_MODE:
+                surface_sampled_occ_fl = (surface_sampled_sdf <= 0.0).float()
+                pos_weight = AlgConf.TVERSKY_BETA * surface_sampled_occ_fl
+                neg_weight = AlgConf.TVERSKY_ALPHA * (1 - surface_sampled_occ_fl)
+                tversky_weights_surface_adj = pos_weight + neg_weight 
         
         # Concatenate coordinates more efficiently
         # Pre-compute sizes
@@ -181,12 +210,14 @@ def run_optimization_loop_fast(init_opt_program, target_mesh, target, sketcher,
         
         # Stochastic preconditioning
         if i < stochastic_precondition_n_iters:
-            all_coords = perform_batched_stochastic_precondition(all_coords, i-decay_start_iter, stochastic_precondition_n_iters)
+            # all_coords = perform_batched_stochastic_precondition(all_coords, i-decay_start_iter, stochastic_precondition_n_iters, AlgConf.STOCHASTIC_PRECONDITION_INIT_VAL_LOWER)
+            all_coords = perform_batched_stochastic_precondition_with_curvature(all_coords, i-decay_start_iter, stochastic_precondition_n_iters, AlgConf.STOCHASTIC_PRECONDITION_INIT_VAL_LOWER, AlgConf.STOCHASTIC_PRECONDITION_INIT_VAL, jc_weights_ext)
             
         ## MAIN FORWARD
         primitive_sdfs, output_sdf = compiled_ops.compiled_assembly_execution(all_coords, transformed_params)
         # primitive_sdfs, output_sdf = opt_functions(all_coords, *transformed_params)
         output_sdf = output_sdf[0]
+
         mask = (output_sdf <= AlgConf.LOSS_BAND).float()
         mask_sum = mask.sum()
         if not mask_sum > 0:
@@ -194,6 +225,11 @@ def run_optimization_loop_fast(init_opt_program, target_mesh, target, sketcher,
                 logger.warning("No valid points")
             i += 1
             transformed_params = transformed_params[:-1]
+            stopping_criteria_3 = i >= max_iter
+            if stopping_criteria_3:
+                logger.info("===========Stopping due to no valid points===========")
+                logger.info(f"cur_iter: {i}, max_iter: {max_iter}")
+                break
             continue
         
         # Use slicing instead of detach().clone() where gradients aren't needed
@@ -218,25 +254,46 @@ def run_optimization_loop_fast(init_opt_program, target_mesh, target, sketcher,
         mask_surface_adj = mask[size0:size0+size1]
         mask_surface = mask[size0+size1:]
         
+        ##  LOSSES - optimized computations
         total_loss = compiled_ops.compiled_loss_function(output_shape_occ, hard_target_fl, 
                                                 output_surface_adj_occ, hard_target_surface_adj_fl, 
+                                                output_surface_adj_sdf, surface_sampled_sdf,
                                                 output_surface_sdf,
                                                 primitive_sdfs, output_sdf, 
                                                 mask_shape, mask_surface, mask_surface_adj,
                                                 transformed_params, 
-                                                scale_factor, curvature_weights)
-            
-        total_loss.backward()
+                                                scale_factor, curvature_weights, base_curvature_weights)
+        
+        if AlgConf.TVERSKY_MODE:
+            alpha = min((i - decay_start_iter) / (base_iters), 1.0) ** 2
+            delta_shape = (output_shape_occ - hard_target_fl) ** 2
+            delta_shape = delta_shape * tversky_weights * alpha
+            loss_shape_occ = 0.5 * th.sum(mask_shape * delta_shape) / th.sum(mask_shape)
+            delta_surface_adj = (output_surface_adj_occ - hard_target_surface_adj_fl) ** 2
+            delta_surface_adj = delta_surface_adj * tversky_weights_surface_adj * alpha
+            loss_surface_adj_occ = 0.5 * th.sum(mask_surface_adj * delta_surface_adj) / th.sum(mask_surface_adj)
+            total_loss = total_loss + AlgConf.LOSS_OCC_ALPHA * loss_shape_occ + AlgConf.LOSS_SURFACE_ADJ_OCC_ALPHA * loss_surface_adj_occ
+        
+        if AlgConf.SEMANTIC_LOSS:
+            # First gather points. 
+            point_soft_assoc, sem_output_sdf = compiled_ops.point2prim_soft(sem_points, transformed_params, smu_k=SMU_K, scale_factor=scale_factor)
 
-        nan_detected = False
-        opt_var_list = [x for ind, x in enumerate(variable_list)]
-        for opt_ind, opt_var in enumerate(opt_var_list):
-            if not (opt_var.grad is None):
-                if th.isnan(opt_var.grad).any():
-                    nan_detected = True
-                    opt_var.grad[th.isnan(opt_var.grad)] = 0.0
-            if nan_detected:
-                print("NAN detected")
+            sem_mask = (sem_output_sdf[0] <= AlgConf.LOSS_BAND / 5.0)# .float()
+            n_points = sem_mask.sum().item()
+            if n_points == 0:
+                continue
+            semantic_loss = compute_semantic_loss(point_soft_assoc, sem_mask, sem_points_labels, n_sem_classes, transformed_params)
+            total_loss = total_loss + semantic_loss * AlgConf.SEMANTIC_LOSS_ALPHA
+
+        if AlgConf.REFLECTION_LOSS and compiled_ops.point2prim_hard is not None:
+            ref_points = all_coords[0]
+            ref_points = ref_points.clone()
+            ref_points[:, 0] = -ref_points[:, 0]
+            ref_output = compiled_ops.point2prim_hard(ref_points.unsqueeze(0), transformed_params)
+            reflection_loss = compute_reflection_loss(ref_output, transformed_params)
+            total_loss = total_loss + reflection_loss * AlgConf.REFLECTION_LOSS_ALPHA
+
+        total_loss.backward()
         
         optim.step()
 
@@ -341,4 +398,37 @@ def run_optimization_loop_fast(init_opt_program, target_mesh, target, sketcher,
         for pos, param in render_params.items():
             render_params[pos] = th.stack(param)
         Stats.record("render_params", render_params, log=False)
+    # reset_bounds(sketcher)
     return best_program
+
+
+
+
+
+def get_scale_factor(i, scale_factors):
+    if i >= len(scale_factors):
+        scale_factor = scale_factors[-1]
+    else:
+        scale_factor = scale_factors[i]
+    return scale_factor
+
+def make_optimizer(param_groups):
+    """
+    Returns a PyTorch optimizer based on AlgConf.OPTIMIZER.
+    Supported: ADAM, ADAMW, MUON, SHAMPOO, KFAC, LBFGS
+    """
+    name = AlgConf.OPTIMIZER.strip().upper()
+    lr = AlgConf.OPT_LR_RATE
+    wd = AlgConf.WEIGHT_DECAY
+
+    if name == "ADAM":
+        logger.info(f"[Optimizer] Using {name} (lr={lr}, weight_decay={0.0})")
+        optim = th.optim.Adam(param_groups, lr=lr)
+    elif name == "ADAMW":
+        logger.info(f"[Optimizer] Using {name} (lr={lr}, weight_decay={wd})")
+        optim = th.optim.AdamW(param_groups, lr=lr, weight_decay=wd)
+    else:
+        raise ValueError(f"Unknown optimizer type: {name}")
+
+    return optim
+

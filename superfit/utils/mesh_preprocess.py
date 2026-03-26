@@ -30,6 +30,12 @@ def extract_mesh(cur_file, *, concatenate=True, process=False, fix_mirrors=True)
     - Uses `graph.to_flattened()` for the per-part case (bakes each node exactly once).
     """
     # Fast path: ask Trimesh to give you one world-baked mesh
+    if os.path.isdir(cur_file):
+        return extract_from_folder(cur_file, fix_mirrors=fix_mirrors, process=process)
+    else:
+        return extract_from_file(cur_file, concatenate=concatenate, fix_mirrors=fix_mirrors, process=process)
+
+def extract_from_file(cur_file, concatenate=True, fix_mirrors=True, process=False):
     if concatenate:
         mesh = trimesh.load(cur_file, force='mesh', process=process)
         if isinstance(mesh, trimesh.Trimesh):
@@ -174,41 +180,6 @@ def get_mask_scaled_aabb(points: th.Tensor,
     return inside_mask
 
 
-def toy_4kload_and_process_mesh(mesh_file):
-    # Load raw mesh (don't let trimesh auto-process)
-    mesh = trimesh.load(mesh_file, process=False)
-
-    # If the file contains multiple geometries (Scene), merge them
-    if isinstance(mesh, trimesh.Scene):
-        mesh = trimesh.util.concatenate(
-            tuple(g for g in mesh.geometry.values())
-        )
-
-    # Ensure the mesh is watertight and triangular
-    if not mesh.is_watertight:
-        logger.warning("Mesh is not watertight")
-
-    # If mesh is not triangulated, force triangulation
-    if not mesh.is_winding_consistent:
-        mesh = mesh.copy()
-        mesh.fix_normals()  # make consistent before triangulation
-    # mesh = mesh.as_triangles()
-
-    # --- Normal estimation ---
-
-    # Compute vertex normals if missing
-    # if mesh.vertex_normals is None or len(mesh.vertex_normals) == 0:
-    #     mesh.vertex_normals = mesh.compute_vertex_normals()
-
-    # Compute face normals (trimesh lazily computes these)
-    face_normals = mesh.face_normals  # triggers computation if needed
-
-    logger.info(f"Loaded mesh: {mesh_file}")
-    logger.info(f"Vertices: {len(mesh.vertices)}")
-    logger.info(f"Faces:    {len(mesh.faces)}")
-
-    return mesh
-
 def target_cleanup_v2(target_sdf, sketcher_3d, min_volume_limit=MIN_VOLUME_LIMIT):
     pos_target = target_sdf.clone()
     mesh_shape = (sketcher_3d.resolution, sketcher_3d.resolution, sketcher_3d.resolution)
@@ -331,7 +302,38 @@ def process_v2_inflate_mesh(input_mesh_file, sketcher_3d, inflate_amount=INFATE_
     final_mesh = sdf_to_mesh(final_sdf, sketcher_3d)
     return final_mesh, final_sdf
 
+def extract_from_folder(mesh_folder, fix_mirrors=True, process=False):
+    # Assume all meshes are in the folder.
+    mesh_list = [os.path.join(mesh_folder, x) for x in os.listdir(mesh_folder) if x.endswith(".obj")]
+    all_meshes = []
+    for mesh_file in mesh_list:
+        mesh = trimesh.load(mesh_file, force='scene', process=process)
+        if isinstance(mesh, trimesh.Trimesh):
+            if fix_mirrors:
+                _fix_if_mirrored(mesh)
+        all_meshes.append(mesh)
+    
+    parts = []
+    for scene in all_meshes:
+        flat = scene.graph.to_flattened()  # {node_name: {'geometry': <name>, 'transform': 4x4}}
+        for _, info in flat.items():
+            geom_name = info.get("geometry")
+            if geom_name is None:
+                continue
+            base = scene.geometry.get(geom_name)
+            if not isinstance(base, trimesh.Trimesh):
+                continue
+            T = np.asarray(info["transform"], dtype=float)
+            m = base.copy()
+            m.apply_transform(T)
+            if fix_mirrors:
+                _fix_if_mirrored(m, T)  # use T to decide winding
+            parts.append(m)
+
+    return trimesh.util.concatenate(parts)
+
 def cd_based_process_mesh_to_sdf(input_mesh_file, sketcher_3d, inflate=False, inflate_amount=INFATE_AMOUNT):
+    # if its a folder do something else.
     input_mesh = extract_mesh(input_mesh_file)
     input_mesh = normalize_to_unit_cube(input_mesh)
     mesh_v1, target_sdf_v1 = process_mesh_to_sdf(input_mesh_file, sketcher_3d, inflate=inflate, inflate_amount=inflate_amount)
@@ -416,3 +418,4 @@ def open_mesh_to_closed_mesh(mesh, sketcher_3d):
     signed_distances = distances * -th.sign(p_inside-P_INSIDE_THRESHOLD).float()
     new_mesh = sdf_to_mesh(signed_distances, sketcher_3d)
     return new_mesh
+

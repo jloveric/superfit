@@ -42,9 +42,10 @@ def get_best_pkl_in_folder(folder_path: str) -> Optional[str]:
     return None
 
 
-def _fit_texture_one(input_file: str, save_html: bool, save_edit_html: bool) -> None:
+def _fit_texture_one(input_file: str, save_html: bool, save_edit_html: bool, ablation: int) -> None:
     """Run texture optimization for a single pkl file (same logic as fit_texture.py)."""
     config_options.main_setting()
+    config_options.set_config_ablation(ablation, fastmode=True)
     sketcher_3d = Sketcher(resolution=AlgConf.DATA_RESOLUTION, n_dims=3)
 
     logger.info("Loading pkl file: %s", input_file)
@@ -146,6 +147,7 @@ def parse_args():
         default=None,
         help="End index (exclusive) for subdirs to process; use with --start_ind for parallel runs",
     )
+    parser.add_argument("--ablation", type=int, default=0, help="Ablation number for config selection.")
     args = parser.parse_args()
     if not os.path.isdir(args.input_dir):
         raise FileNotFoundError(f"Input directory not found: {args.input_dir}")
@@ -185,7 +187,7 @@ def main(args: argparse.Namespace) -> None:
 
         logger.info("Fitting texture for: %s (from %s)", folder_name, pkl_path)
         try:
-            _fit_texture_one(pkl_path, args.save_html, args.save_edit_html)
+            _fit_texture_one(pkl_path, args.save_html, args.save_edit_html, args.ablation)
             logger.info("Done: %s", folder_name)
         except Exception as e:
             logger.error("Error fitting texture for %s: %s", folder_name, e)

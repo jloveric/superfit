@@ -14,6 +14,7 @@ from .estimate_init_params import generate_prim_initializations
 import superfit.symbolic as sps
 from .eval_tools import get_recon_measure, MeasurePack
 from .decompose_msd import msd
+from .decompose_others import coacd_decompose, vhacd_decompose
 from ..utils.config import AlgorithmConfig as AlgConf
 from ..utils.stats import Stats
 from ..utils.logger import logger
@@ -60,8 +61,7 @@ def resfit(target_mesh,
 
     primitives = []
     init_start_time = time.time()
-    last_run = False
-    while cur_iter < AlgConf.MPS_MAX_ITER:
+    while cur_iter < AlgConf.RESFIT_MAX_ITER:
         with Stats.scope(f"iter_{cur_iter}"):
             # try:
             if running_program:
@@ -76,9 +76,20 @@ def resfit(target_mesh,
 
             with Stats.timer("initialization"):
                 with th.no_grad():
-                    # HACK: Helps with thin sheets. 
-                    # masked_target_sdf = masked_target_sdf - 0.005
-                    pruned_parts, _ = msd(masked_target_sdf, decompose_sketcher, **AlgConf.DECOMPOSE_CONFIG)
+                    decompose_mode = (AlgConf.DECOMPOSE_MODE or "MSD").upper()
+                    decompose_config = dict(AlgConf.DECOMPOSE_CONFIG or {})
+                    if decompose_mode == "MSD":
+                        pruned_parts, _ = msd(masked_target_sdf, decompose_sketcher, **decompose_config)
+                    elif decompose_mode == "COACD":
+                        if AlgConf.DECOMPOSE_SIZE_LIMIT is not None and "max_convex_hull" not in decompose_config:
+                            decompose_config["max_convex_hull"] = AlgConf.DECOMPOSE_SIZE_LIMIT
+                        pruned_parts = coacd_decompose(masked_target_sdf, decompose_sketcher, **decompose_config)
+                    elif decompose_mode == "VHACD":
+                        if AlgConf.DECOMPOSE_SIZE_LIMIT is not None and "size_limit" not in decompose_config:
+                            decompose_config["size_limit"] = AlgConf.DECOMPOSE_SIZE_LIMIT
+                        pruned_parts = vhacd_decompose(masked_target_sdf, decompose_sketcher, **decompose_config)
+                    else:
+                        raise ValueError(f"Unsupported DECOMPOSE_MODE: {AlgConf.DECOMPOSE_MODE}")
                     if len(pruned_parts) == 0:
                         logger.info("===No parts found - Reached Stopping Criteria===")
                         break
@@ -187,7 +198,7 @@ def resfit(target_mesh,
             # Better way to handle failure comes here. 
             # Mask target the occupied regions. 
             masked_target_sdf = get_masked(running_program, decompose_target_sdf.clone(), decompose_sketcher)
-            if AlgConf.DECOMPOSE_MODE == "COACD":
+            if not AlgConf.DECOMPOSE_MODE == "MSD":
                 # Other wise coacd fails to get good primitives. 
                 masked_target_sdf = masked_target_sdf - CLEAN_UP_DELTA
                 masked_target_sdf = target_cleanup(masked_target_sdf, decompose_sketcher, AlgConf.MIN_VOLUME_LIMIT_FOR_REINIT)
@@ -205,40 +216,15 @@ def resfit(target_mesh,
 
         if masked_target_sdf.min() > 0.0:
             logger.info("Target SDF is fully occupied - stopping")
-
-            if AlgConf.RUN_LAST_OPT:
-                if not last_run:
-                    logger.info("-------------------------------- Running last optimization --------------------------------")
-                    last_run = True
-                    cur_iter += 1
-                    continue
-                else:
-                    logger.info("==================== Finished running last optimization ====================")
-                    break
-            else:
-                break
+            break
 
         if AlgConf.EARLY_STOP and cur_iter - best_iter >= AlgConf.EARLY_STOP_ITER:
             logger.info(f"Early stopping at iteration {cur_iter} as no improvement")
             logger.info(f"Previous best iter: {best_iter}")
-            
-            if AlgConf.RUN_LAST_OPT:
-                if not last_run:
-                    logger.info("-------------------------------- Running last optimization --------------------------------")
-                    last_run = True
-                    cur_iter += 1
-                    continue
-                else:
-                    logger.info("==================== Finished running last optimization ====================")
-                    break
-            else:
-                break
+            break
         else:
             logger.info("Did not reach early stop condition")
             logger.info(f"cur_iter: {cur_iter}, best_iter: {best_iter}")
-        if AlgConf.RUN_LAST_OPT and last_run:
-            logger.info("==================== Finished running last optimization ====================")
-            break
 
         cur_iter += 1
     total_time = time.time() - init_start_time
@@ -260,7 +246,7 @@ def resfit(target_mesh,
         Stats.record("best_iou", best_iou)
         Stats.record("best_recon_measure", best_recon_measure)
     
-    logger.info(f"===========MPS: Time taken: {total_time:.3f}s ===========")
+    logger.info(f"===========RESFIT: Time taken: {total_time:.3f}s ===========")
 
     if perform_eval:
         with Stats.scope("evaluation"):

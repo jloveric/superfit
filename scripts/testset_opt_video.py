@@ -1,13 +1,5 @@
 """
-Batch script to generate optimization videos for a list of folder names.
-
-Edit FOLDER_NAMES at the top of this script to the list of folder_name values
-you want videos for. Folder names are the same as in generate_on_testset.py:
-- toys4k: e.g. "truck_028", "apple_003" (basename of mesh directory)
-- partobjaverse: e.g. filename without extension
-
-Each shape's videos are saved in that shape's directory (input_dir/folder_name)
-alongside primitive_assembly.pkl. All iterations are saved as separate video files.
+Batch script to generate optimization videos from shape folders under input_dir.
 """
 import os
 import argparse
@@ -16,20 +8,10 @@ from superfit.utils.render_seq import generate_renders
 from superfit.utils.logger import logger
 
 
-# -----------------------------------------------------------------------------
-# Edit this list: folder_name for each shape you want optimization videos for.
-# Same convention as generate_on_testset.py (e.g. "truck_028", "apple_003").
-# -----------------------------------------------------------------------------
-FOLDER_NAMES = [
-    "truck_028",
-    # "apple_003",
-]
-
-
 def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
-        description="Generate optimization videos for a list of folder names (see FOLDER_NAMES at top of script)"
+        description="Generate optimization videos for folders under input_dir."
     )
     parser.add_argument(
         "--input_dir",
@@ -40,9 +22,10 @@ def parse_args():
     parser.add_argument(
         "--save_name",
         type=str,
-        default="opt_video",
+        default=None,
         help="Base name for saved video files (default: opt_video)",
     )
+    parser.add_argument("--ablation", type=int, default=0, help="Ablation number for output naming.")
     parser.add_argument(
         "--mode",
         type=str,
@@ -56,6 +39,13 @@ def parse_args():
         default=True,
         help="Save all iterations in a single video (default: save each iteration separately)",
     )
+    parser.add_argument(
+        "--folders",
+        type=str,
+        nargs="*",
+        default=None,
+        help="Optional explicit folder names. If omitted, all subdirectories under input_dir are processed.",
+    )
     args = parser.parse_args()
 
     # Validate mode
@@ -68,16 +58,27 @@ def parse_args():
         except ValueError:
             raise ValueError(f"Mode must be 'all' or an integer, got: {args.mode}")
 
+    if args.save_name is None:
+        args.save_name = f"opt_video_ablation_{args.ablation}"
+
     return args
 
 
 def main(args: argparse.Namespace):
-    """Generate optimization videos for each folder name in FOLDER_NAMES."""
-    if not FOLDER_NAMES:
-        logger.warning("FOLDER_NAMES is empty. Edit the list at the top of this script.")
+    """Generate optimization videos for each selected folder under input_dir."""
+    if args.folders is None:
+        folder_names = sorted(
+            d for d in os.listdir(args.input_dir)
+            if os.path.isdir(os.path.join(args.input_dir, d)) and not d.startswith(".")
+        )
+    else:
+        folder_names = args.folders
+
+    if not folder_names:
+        logger.warning("No folders selected for video generation.")
         return
 
-    for folder_name in FOLDER_NAMES:
+    for folder_name in folder_names:
         shape_dir = os.path.join(args.input_dir, folder_name)
         input_file = os.path.join(shape_dir, "primitive_assembly.pkl")
 

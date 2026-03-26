@@ -19,6 +19,8 @@ SAMPLING_PATIENCE = 10
 TEMP_SCALE_FACTOR = 2.0
 MAX_INNER_LOOP_LEAVE_ONE_OUT = 100
 MIN_VOL_LIMIT = 1e-4
+INTERSECTION_REMOVAL_THRESHOLD = 0.8
+DILATE_AMOUNT = 0.05
 
 def main_pruning_pipeline(in_expr, sketcher, measure_pack, post_prune=False):
     # Initialize seeds for pruning (set once at start)
@@ -54,6 +56,7 @@ def main_pruning_pipeline(in_expr, sketcher, measure_pack, post_prune=False):
         Stats.record("prune_tiny_parts_n_prim", best_n_prim)
         Stats.record("prune_tiny_parts_obj", best_obj)
         
+        # This is more aggressive. 
         sel_opt_program_v2, best_recon_measure_v2, best_n_prim_v2, best_obj_v2 = prune_tiny_parts_v2(sel_opt_program, sketcher, measure_pack)
         Stats.record("prune_tiny_parts_v2_recon_measure", best_recon_measure_v2)
         Stats.record("prune_tiny_parts_v2_n_prim", best_n_prim_v2)
@@ -464,14 +467,14 @@ def prune_tiny_parts_v2(in_expr, sketcher, measure_pack):
         n_prims.append(len(gather_primitives(expr)))
     all_execs = th.stack(all_execs, dim=0)
     
-    all_occs = all_execs <= 0
+    all_occs = all_execs <= DILATE_AMOUNT
     vol = (all_occs).float().sum(dim=1) # / (sketcher.resolution ** 3)
     # Second condition - I(A, T) = 0
-    intersection_measures = th.logical_and(all_occs, measure_pack.target_sdf[None, :] <= 0).float().sum(dim=1)
+    intersection_measures = th.logical_and(all_occs, measure_pack.target_sdf[None, :] <= DILATE_AMOUNT).float().sum(dim=1)
     # intersection_measures = intersection_measures / (sketcher.resolution ** 3)
     intersection_measures = intersection_measures / vol
     # vol_removal_options = [ind for ind, x in enumerate(vol) if x < MIN_VOL_LIMIT]
-    intersection_removal_options = [ind for ind, x in enumerate(intersection_measures) if x < 0.6]
+    intersection_removal_options = [ind for ind, x in enumerate(intersection_measures) if x < INTERSECTION_REMOVAL_THRESHOLD]
     removal_options = intersection_removal_options# set(vol_removal_options).intersection(set(intersection_removal_options))
     try_0_removal = False
     if 0 in removal_options:

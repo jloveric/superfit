@@ -169,12 +169,24 @@ SuperFrustumShader = register_shader_module("""
 // rotate 90° CCW
 vec2 rot90(vec2 v){ return vec2(-v.y, v.x); }
 
+// Note: Ideally enforce this.
+// float maxBulge(float sx, float sz)
+//{
+//    float sz_lim = sz * 1.1;
+//    if (sx <= sz_lim) return 2.0;
+//    float s = clamp(sz_lim / sx, 0.0, 1.0);
+//    float half_theta = asin(s);
+//    return tan(0.5 * half_theta);
+//}
+
 vec2 mapArcBulge(vec2 p, float z, float bulge)
-{
+{   
     float half_z = 0.5 * z;
     p.x = p.x * sign(bulge);
     float theta_top = max(abs(bulge) * (PI * 0.5), BULGE_EPS);
-    //float theta_top = bulge * (PI * 0.5);
+    // float theta_top = bulge * (PI * 0.5);
+    // Note: Ideally use this.
+    // float theta_top = max(2.0 * atan(abs(bulge)), BULGE_EPS);
 
     float center_pos = half_z / tan(theta_top);
     vec2  center = vec2(center_pos, 0.0);
@@ -222,6 +234,8 @@ float SuperFrustum(vec3 p, vec3 size, float roundness, float dilate_3d, float sc
     vec3 new_p = p;
     if (bulge != 0.0)
     {
+        // float bulge_lim = maxBulge(size.x, size.z);
+        // bulge = clamp(bulge, -bulge_lim, bulge_lim);
         vec2 new_xz = mapArcBulge(p.xz, size.z, bulge);
         new_p = vec3(new_xz.x, p.y, new_xz.y);
     }

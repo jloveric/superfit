@@ -26,7 +26,6 @@ def batched_sq_packed_eval(coords, params):
     epsilon_2 = params[..., 7:8]
     rotate = params[..., 8:11]
     transformed_coords = common_transform_coords(coords, translate, rotate)
-    transformed_coords = transformed_coords[..., [0, 2, 1]]
     sdf_eval = sdf3d_inexact_super_quadrics(transformed_coords, skew_vec, epsilon_1, epsilon_2)
     return sdf_eval
 
@@ -101,7 +100,6 @@ def batched_varaxis_sq_packed_eval(coords: th.Tensor,
     rotate = params[..., 11:14]
     
     transformed_coords = common_transform_coords(coords, translate, rotate)
-    transformed_coords = transformed_coords[..., [0, 2, 1]]
     
     sdf_y = sdf3d_inexact_super_quadrics(transformed_coords, skew_vec, epsilon_1, epsilon_2)
     new_coords = transformed_coords.clone()[:, :, [1, 2, 0]]
@@ -146,12 +144,6 @@ def batched_varaxis_sq_packed_stochastic_eval(coords, params, logits, temperatur
     # Equivalent to weighted sum of [outputs, 1.0]
     out = outputs * w0 + w1
     return out
-
-
-def batched_varaxis_sq_packed_stochastic_su_eval(coords, params, su_vals, logits, temperature):
-    output = batched_varaxis_sq_packed_stochastic_eval(coords, params, logits, temperature)
-    out = smooth_union_k_way(output, su_vals)
-    return (output, out)
 
 
 function_map = {

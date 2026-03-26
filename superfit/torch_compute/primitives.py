@@ -31,7 +31,6 @@ def  cuboid_eval(coords: th.Tensor, size: th.Tensor) -> th.Tensor:
 
 def superquadric_eval(coords: th.Tensor, size: th.Tensor, epsilon_1: th.Tensor, epsilon_2: th.Tensor) -> th.Tensor:
     size = size / 2.0
-    coords = coords[..., [0, 2, 1]]
     sdf_eval = sdf3d_inexact_super_quadrics(coords, size, epsilon_1, epsilon_2)
     return sdf_eval
 
@@ -345,8 +344,7 @@ def varaxis_P(coords, logits, temperature=1.0):
     ])  # (3,3,3)
 
     # Mix to get chosen permutation matrix; forward it's exactly one of them.
-
-    P = (y @ P_stack.reshape(3, 9)).reshape(3, 3)   # (3,3)
+    # P = (y @ P_stack.reshape(3, 9)).reshape(3, 3)   # (3,3)
     P = th.einsum('k,kij->ij', y, P_stack)  # (3,3)
     return P
 

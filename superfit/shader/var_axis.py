@@ -5,6 +5,9 @@ import numpy as np
 from sysl.shader.shader_module import register_shader_module
 from sysl.shader.shader_templates.common import CONSTANTS
 
+# ================================ Y Axis ================================
+
+
 SuperFrustumYShader = register_shader_module("""
 @name SuperFrustumY
 @inputs pos, radius
@@ -49,6 +52,33 @@ float SFSPY(vec3 p, vec3 size, vec4 params, float onion_ratio)
 {
     return SFSP(p, size, params, onion_ratio);
 }""")       
+
+SPPSPYShader = register_shader_module("""
+@name SPPSPY
+@inputs pos, size, roundess, doe
+@outputs dist
+@dependencies SPPSP
+@vardeps 
+
+float SPPSPY(vec3 p, vec3 size, vec4 roundess, vec4 doe)
+{
+    return SPPSP(p, size, roundess, doe);
+}""")
+
+SGSPYShader = register_shader_module("""
+@name SGSPY
+@inputs pos, size, params, params_2
+@outputs dist
+@dependencies SGSP
+@vardeps 
+
+float SGSPY(vec3 p, vec3 size, vec4 params, vec4 params_2)
+{
+    return SGSP(p, size, params, params_2);
+}""")  
+
+# ================================ Z Axis ================================
+
 
 SuperFrustumZShader = register_shader_module("""
 @name SuperFrustumZ
@@ -103,6 +133,36 @@ float SFSPZ(vec3 p, vec3 size, vec4 params, float onion_ratio)
     return SFSP(p, size, params, onion_ratio);
 }""")
 
+SPPSPZShader = register_shader_module("""
+@name SPPSPZ
+@inputs pos, size, roundess, doe
+@outputs dist
+@dependencies SPPSP
+@vardeps 
+
+float SPPSPZ(vec3 p, vec3 size, vec4 roundess, vec4 doe)
+{
+    return SPPSP(p, size, roundess, doe);
+}""")
+
+SGSPZShader = register_shader_module("""
+@name SGSPZ
+@inputs pos, size, params, params_2
+@outputs dist
+@dependencies SGSP
+@vardeps 
+
+float SGSPZ(vec3 p, vec3 size, vec4 params, vec4 params_2)
+{
+    p = p.yzx;
+    size = size.yzx;
+    return SGSP(p, size, params, params_2);
+}""")
+
+
+# ================================ X Axis ================================
+
+
 SuperFrustumXShader = register_shader_module("""
 @name SuperFrustumX
 @inputs pos, radius
@@ -154,4 +214,30 @@ float SFSPX(vec3 p, vec3 size, vec4 params, float onion_ratio)
     p = p.zxy;
     size = size.zxy;
     return SFSP(p, size, params, onion_ratio);
+}""")
+
+SPPSPXShader = register_shader_module("""
+@name SPPSPX
+@inputs pos, size, roundess, doe
+@outputs dist
+@dependencies SPPSP
+@vardeps 
+
+float SPPSPX(vec3 p, vec3 size, vec4 roundess, vec4 doe)
+{
+    return SPPSP(p, size, roundess, doe);
+}""")
+
+SGSPXShader = register_shader_module("""
+@name SGSPX
+@inputs pos, size, params, onion_ratio
+@outputs dist
+@dependencies SGSP
+@vardeps 
+
+float SGSPX(vec3 p, vec3 size, vec4 params, vec4 params_2)
+{
+    p = p.zxy;
+    size = size.zxy;
+    return SGSP(p, size, params, params_2);
 }""")

@@ -6,6 +6,7 @@ import geolipi.symbolic as gls
 from geolipi.symbolic.symbol_types import PRIM_TYPE
 from geolipi.torch_compute.transforms import axis_angle_to_rotation_matrix
 import superfit.symbolic as sps
+from . import rotation_functions as rotf
 from .symbolic_types import VALID_BATCHED_STOCHASTIC_SU_CLASSES, VARAXIS_CLASSES, SFSP_CLASSES, SFSP_UNRAVEL_CLASSES
 from .base import StochasticPrimitive, PrimitiveMarker
 
@@ -32,6 +33,40 @@ VARAXIS_MAP = {
     },
 }
 
+_AXIS_VARIANT_TO_BASE = {
+    sps.SuperFrustumX: sps.SuperFrustum,
+    sps.SuperFrustumY: sps.SuperFrustum,
+    sps.SuperFrustumZ: sps.SuperFrustum,
+    sps.SuperQuadricX: sps.SuperQuadric,
+    sps.SuperQuadricY: sps.SuperQuadric,
+    sps.SuperQuadricZ: sps.SuperQuadric,
+    sps.SPProtoX: sps.SPProto,
+    sps.SPProtoY: sps.SPProto,
+    sps.SPProtoZ: sps.SPProto,
+    sps.SuperGeonX: sps.SuperGeon,
+    sps.SuperGeonY: sps.SuperGeon,
+    sps.SuperGeonZ: sps.SuperGeon,
+}
+
+_AXIS_VARIANT_PERM = {
+    # Y is identity (base orientation)
+    sps.SuperFrustumY: (0, 1, 2),
+    sps.SuperQuadricY: (0, 1, 2),
+    sps.SPProtoY: (0, 1, 2),
+    sps.SuperGeonY: (0, 1, 2),
+    # Z variants use [x, y, z] -> [y, z, x]
+    sps.SuperFrustumZ: (1, 2, 0),
+    sps.SuperQuadricZ: (1, 2, 0),
+    sps.SPProtoZ: (1, 2, 0),
+    sps.SuperGeonZ: (1, 2, 0),
+    # X variants use [x, y, z] -> [z, x, y]
+    sps.SuperFrustumX: (2, 0, 1),
+    sps.SuperQuadricX: (2, 0, 1),
+    sps.SPProtoX: (2, 0, 1),
+    sps.SuperGeonX: (2, 0, 1),
+}
+
+
 SFSP_CONVERSION_MAP = {
     sps.SFSPX: sps.SuperFrustumX,
     sps.SFSPY: sps.SuperFrustumY,
@@ -41,6 +76,22 @@ SFSP_CONVERSION_MAP = {
     sps.SuperFrustumZ: sps.SFSPZ,
     sps.SuperFrustum: sps.SFSP,
     sps.SFSP: sps.SuperFrustum,
+    sps.SPPSPX: sps.SPProtoX,
+    sps.SPPSPY: sps.SPProtoY,
+    sps.SPPSPZ: sps.SPProtoZ,
+    sps.SPPSP: sps.SPProto,
+    sps.SGSPX: sps.SuperGeonX,
+    sps.SGSPY: sps.SuperGeonY,
+    sps.SGSPZ: sps.SuperGeonZ,
+    sps.SGSP: sps.SuperGeon,
+    sps.SPProtoX: sps.SPPSPX,
+    sps.SPProtoY: sps.SPPSPY,
+    sps.SPProtoZ: sps.SPPSPZ,
+    sps.SPProto: sps.SPPSP,
+    sps.SuperGeonX: sps.SGSPX,
+    sps.SuperGeonY: sps.SGSPY,
+    sps.SuperGeonZ: sps.SGSPZ,
+    sps.SuperGeon: sps.SGSP,
 }
 
 
@@ -77,9 +128,29 @@ def inject_stochastic_prim(
 
 
 
-def recursive_sfsp_to_sf(gls_expr):
-    if isinstance(gls_expr, SFSP_CLASSES):
-        new_args = []
+def recursive_packed_to_prim(gls_expr):
+    # SPPSP + SPPSPX|Y|Z (all subclass SPPSP) -> SPProto family
+    if isinstance(gls_expr, sps.SPPSP):
+        cur_expr = gls_expr.sympy()
+        a = cur_expr.get_args()
+        size, rnd, doe = a[0], a[1], a[2]
+        rnd4 = (rnd[0], rnd[1], rnd[2], rnd[3])
+        ctor = SFSP_CONVERSION_MAP[gls_expr.__class__]
+        return ctor(size, rnd4, (doe[0],), (doe[1],), (doe[2], doe[3]))
+
+    # SGSP (incl. SGSPX/Y/Z) -> SuperGeon family
+    if isinstance(gls_expr, sps.SGSP):
+        cur_expr = gls_expr.sympy()
+        a = cur_expr.get_args()
+        size, p, p2 = a[0], a[1], a[2]
+        ctor = SFSP_CONVERSION_MAP[gls_expr.__class__]
+        return ctor(
+            size,
+            (p[0],), (p[1],), (p[2],), (p[3],),
+            (p2[0],), (p2[1],), (p2[2],), (p2[3],),
+        )
+
+    if isinstance(gls_expr, sps.SFSP):
         cur_expr = gls_expr.sympy()
         ntc_args = cur_expr.get_args()
         new_expr = SFSP_CONVERSION_MAP[gls_expr.__class__](ntc_args[0], 
@@ -89,22 +160,20 @@ def recursive_sfsp_to_sf(gls_expr):
                     (ntc_args[1][3],), 
                     ntc_args[2])
         return new_expr
-    else:
-        if isinstance(gls_expr, gls.GLFunction):
-            old_args = gls_expr.get_args()
-            new_args = []
-            for arg in old_args:
-                if isinstance(arg, gls.GLBase):
-                    out_expr = recursive_sfsp_to_sf(arg)
-                    new_args.append(out_expr)
-                else:
-                    new_args.append(arg)
-            return gls_expr.__class__(*new_args)
-        else:
-            return gls_expr
+    if isinstance(gls_expr, gls.GLFunction):
+        old_args = gls_expr.get_args()
+        new_args = []
+        for arg in old_args:
+            if isinstance(arg, gls.GLBase):
+                new_args.append(recursive_packed_to_prim(arg))
+            else:
+                new_args.append(arg)
+        return gls_expr.__class__(*new_args)
+    return gls_expr
 
-def recursive_sf_to_sfsp(gls_expr):
-    if isinstance(gls_expr, SFSP_UNRAVEL_CLASSES):
+
+def recursive_prim_to_packed(gls_expr):
+    if isinstance(gls_expr, sps.SuperFrustum):
         new_args = []
         cur_expr = gls_expr.sympy()
         ntc_args = cur_expr.get_args()
@@ -113,12 +182,22 @@ def recursive_sf_to_sfsp(gls_expr):
         arg_2 = ntc_args[5]
         new_expr = SFSP_CONVERSION_MAP[gls_expr.__class__](arg_0, arg_1, arg_2)
         return new_expr
+    if isinstance(gls_expr, sps.SPProto):
+        a = gls_expr.sympy().get_args()
+        doe = (a[2][0], a[3][0], a[4][0], a[4][1])
+        return SFSP_CONVERSION_MAP[gls_expr.__class__](a[0], a[1], doe)
+    if isinstance(gls_expr, sps.SuperGeon):
+        cur_expr = gls_expr.sympy()
+        a = cur_expr.get_args()
+        params = (a[1][0], a[2][0], a[3][0], a[4][0])
+        params2 = (a[5][0], a[6][0], a[7][0], a[8][0])
+        return SFSP_CONVERSION_MAP[gls_expr.__class__](a[0], params, params2)
     else:
         if isinstance(gls_expr, gls.GLFunction):
             new_args = []
             for arg in gls_expr.args:
                 if isinstance(arg, gls.GLBase):
-                    out_expr = recursive_sf_to_sfsp(arg)
+                    out_expr = recursive_prim_to_packed(arg)
                     new_args.append(out_expr)
                 else:
                     new_args.append(arg)
@@ -127,54 +206,13 @@ def recursive_sf_to_sfsp(gls_expr):
             return gls_expr
 
 def convert_axis_angle_to_euler(axis_angle: th.Tensor) -> th.Tensor:
-    """
-    Convert a 3D axis-angle vector (..., 3) into Euler angles (..., 3)
-    following the rotation order defined by Settings.ROT_ORDER
-    (e.g., 'XYZ', 'ZXY', etc.).
-
-    Returns a tensor of Euler angles (same batch shape as axis_angle).
-    """
-
-    # 1) Convert AA → rotation matrix (...,3,3)
-    R = axis_angle_to_rotation_matrix(axis_angle)  # (..., 3, 3)
+    return rotf.convert_axis_angle_to_euler(axis_angle)
 
 
-    # Prepare output
-    # Result shape is (..., 3)
-    euler = []
+def recursive_axisangle_to_eulerangle(gls_expr):
+    return rotf.recursive_axisangle_to_eulerangle(gls_expr)
 
-    # R = R_x * R_y * R_z
-    sy = -R[..., 2, 0]
-    cy = th.sqrt(1 - sy * sy)
-    x = th.atan2(R[..., 2, 1], R[..., 2, 2])
-    y = th.atan2(sy, cy)
-    z = th.atan2(R[..., 1, 0], R[..., 0, 0])
-    euler = th.stack([x, z, -y], dim=-1)
 
-    return euler
-
-def recursive_axisangle_to_euler(gls_expr):
-    if isinstance(gls_expr, gls.AxisAngleRotate3D):
-        new_args = []
-        arg_0 = gls_expr.get_arg(0)
-        arg_1 = gls_expr.tensor().get_arg(1)
-        new_arg_0 = recursive_axisangle_to_euler(arg_0)
-        new_arg_1 = convert_axis_angle_to_euler(arg_1)
-        new_expr = gls.EulerRotate3D(new_arg_0, new_arg_1).sympy()
-        return new_expr
-    else:
-        if isinstance(gls_expr, gls.GLFunction):
-            in_args = gls_expr.get_args()
-            new_args = []
-            for arg in in_args:
-                if isinstance(arg, gls.GLBase):
-                    out_expr = recursive_axisangle_to_euler(arg)
-                    new_args.append(out_expr)
-                else:
-                    new_args.append(arg)
-            return gls_expr.__class__(*new_args)
-        else:
-            return gls_expr
 
 def n_prims_in_expr(expr, n_prims=0):
     if isinstance(expr, PRIM_TYPE):
@@ -230,16 +268,22 @@ def reduce_varaxis(expr, temperature: float = 0.1, relaxed_eval: bool = True):
     new_expr = VARAXIS_MAP[expr.__class__][int(sel_ind)](*remaining_args)
     return new_expr
 
-def fetch_singular_expr_eval(expr, temperature=0.1, relaxed_eval=True, remove_marker=True):
+def fetch_singular_expr_eval(expr, temperature=0.1, relaxed_eval=True, remove_marker=True, fix_axis_variant=False, use_euler_angle=False):
     if isinstance(expr, StochasticPrimitive):
         new_expr = fetch_singular_expr_stochastic(expr, relaxed_eval=relaxed_eval)
-        out_expr = fetch_singular_expr_eval(new_expr, temperature=temperature, relaxed_eval=relaxed_eval, remove_marker=remove_marker)
+        out_expr = fetch_singular_expr_eval(new_expr, temperature=temperature, relaxed_eval=relaxed_eval, remove_marker=remove_marker, fix_axis_variant=fix_axis_variant, use_euler_angle=use_euler_angle)
         return out_expr
     elif isinstance(expr, VARAXIS_CLASSES):
         new_expr = reduce_varaxis(expr, temperature=temperature, relaxed_eval=relaxed_eval)
         return new_expr
     elif isinstance(expr, PrimitiveMarker):
-        in_expr = fetch_singular_expr_eval(expr.args[0], temperature=temperature, relaxed_eval=relaxed_eval, remove_marker=remove_marker)
+        in_expr = fetch_singular_expr_eval(expr.args[0], temperature=temperature, relaxed_eval=relaxed_eval, remove_marker=remove_marker, fix_axis_variant=fix_axis_variant, use_euler_angle=use_euler_angle)
+        if fix_axis_variant:
+            in_expr = convert_marked_axis_variant_to_single_rotation(in_expr, use_euler_angle=use_euler_angle)
+        if use_euler_angle:
+            in_expr = recursive_axisangle_to_eulerangle(in_expr)
+        else:
+            in_expr = rotf.recursive_eulerangle_to_axisangle(in_expr)
         if remove_marker:
             return in_expr
         else:
@@ -252,7 +296,7 @@ def fetch_singular_expr_eval(expr, temperature=0.1, relaxed_eval=True, remove_ma
         has_null = False
         for arg in expr.args:
             if isinstance(arg, gls.GLFunction):
-                new_expr = fetch_singular_expr_eval(arg, temperature=temperature, relaxed_eval=relaxed_eval, remove_marker=remove_marker)
+                new_expr = fetch_singular_expr_eval(arg, temperature=temperature, relaxed_eval=relaxed_eval, remove_marker=remove_marker, fix_axis_variant=fix_axis_variant, use_euler_angle=use_euler_angle)
                 if not isinstance(new_expr, gls.NullExpression3D):
                     new_args.append(new_expr)
                 else:
@@ -475,4 +519,112 @@ def inject_temperature_solid_ntco(program, temperature=None):
             new_args.append(arg)
         return program.__class__(*new_args)
     return program
+
+
+def _perm_to_matrix(perm: tuple[int, int, int], ref: th.Tensor) -> th.Tensor:
+    # Build permutation matrix P such that:
+    #   (P @ v)[i] = v[perm[i]]
+    mat = th.zeros((3, 3), dtype=ref.dtype, device=ref.device)
+    for i, j in enumerate(perm):
+        mat[i, j] = 1.0
+    return mat
+
+
+def _permute_vec3_expr(vec3_expr: gls.GLBase, perm: tuple[int, int, int]) -> gls.GLBase:
+    """
+    Construct a new Vector[3] expression with components permuted like:
+      new_vec[i] = vec[perm[i]]
+    """
+    return gls.Vec3(
+        gls.VarSplitter(vec3_expr, perm[0]),
+        gls.VarSplitter(vec3_expr, perm[1]),
+        gls.VarSplitter(vec3_expr, perm[2]),
+    )
+
+
+def _rotation_matrix_to_euler_xyz(R: th.Tensor) -> th.Tensor:
+    return rotf._rotation_matrix_to_euler_xyz(R)
+
+
+def _euler_xyz_to_rotation_matrix(euler: th.Tensor) -> th.Tensor:
+    return rotf._euler_xyz_to_rotation_matrix(euler)
+
+
+def rotation_matrix_to_axis_angle(R: th.Tensor, variant: str = "default", eps: float = 1e-6) -> th.Tensor:
+    return rotf.rotation_matrix_to_axis_angle(R, variant=variant, eps=eps)
+
+
+def _rotation_matrix_to_axis_angle(R: th.Tensor, eps_theta: float = 1e-6) -> th.Tensor:
+    # Backward-compatible internal helper.
+    return rotation_matrix_to_axis_angle(R, variant="default", eps=eps_theta)
+
+
+def convert_marked_axis_variant_to_single_rotation(translate_expr: gls.GLBase, use_euler_angle=True) -> gls.GLBase:
+    """
+    Convert one guaranteed `PrimitiveMarker` of the form:
+      Translate3D( AxisAngleRotate3D(VariantPrim, aa), t ) 
+    into:
+      Translate3D( EulerRotate3D(BasePrim(permute size), euler), t ) 
+    """
+    if not isinstance(translate_expr, gls.Translate3D):
+        raise TypeError(
+            "Expected PrimitiveMarker.args[0] to be Translate3D("
+            f"AxisAngleRotate3D(<VariantPrim>, aa), t) but got {type(translate_expr)}"
+        )
+
+    axis_angle_expr = translate_expr.args[0]
+    if not isinstance(axis_angle_expr, gls.AxisAngleRotate3D):
+        raise TypeError(
+            "Expected Translate3D.expr to be AxisAngleRotate3D(<VariantPrim>, aa), "
+            f"but got {type(axis_angle_expr)}"
+        )
+
+    variant_prim = axis_angle_expr.args[0]
+    if not isinstance(variant_prim, tuple(_AXIS_VARIANT_TO_BASE.keys())):
+        # Nothing to do; return marker as-is.
+        return translate_expr
+
+    # Extract fixed remap and fold:
+    #   Translate3D( AxisAngleRotate3D(VariantPrim, aa), t )
+    # into:
+    #   Translate3D( EulerRotate3D(BasePrim(permute size), euler), t )
+    variant_cls = variant_prim.__class__
+    base_cls = _AXIS_VARIANT_TO_BASE[variant_cls]
+    perm = _AXIS_VARIANT_PERM[variant_cls]
+
+    # In the Torch evaluator wrappers, axis variants only permute `coords` and `size`.
+    # So we permute only the `size` vector (arg0) and keep the remaining params unchanged.
+    prim_args = list(variant_prim.get_args())
+    prim_args[0] = prim_args[0][list(perm)]
+    base_prim = base_cls(*prim_args)
+
+    rot_aa = axis_angle_expr.tensor().get_arg(1)
+    aa_b = rot_aa.reshape(-1, 3)
+    R1 = axis_angle_to_rotation_matrix(aa_b)
+
+    # Variant wrapper permutes coords AFTER the incoming axis-angle rotation:
+    #   v_new = P @ (R1 @ v)
+    R2 = _perm_to_matrix(perm, rot_aa).to(R1.dtype).to(R1.device)
+    R2 = R2.expand(R1.shape[0], 3, 3)
+    R = R2 @ R1
+    if use_euler_angle:
+        euler = _rotation_matrix_to_euler_xyz(R).reshape(*rot_aa.shape[:-1], 3)
+        new_rotate = gls.EulerRotate3D(base_prim, euler).sympy()
+    else:
+        # Axis-angle fallback: this is only valid for a single rotation.
+        # `R` is built from `rot_aa.reshape(-1, 3)` so the batch dim is the first dim.
+        if R.shape[0] != 1:
+            raise ValueError(
+                "convert_marked_axis_variant_to_single_rotation(axis-angle fallback) "
+                f"expects a single rotation, but got {R.shape[0]} rotations."
+            )
+
+        R_single = R[0]
+        composed_axis_angle = rotation_matrix_to_axis_angle(R_single)
+        new_rotate = gls.AxisAngleRotate3D(base_prim, composed_axis_angle).sympy()
+
+    translate_arg = translate_expr.get_arg(1)
+    new_translate = gls.Translate3D(new_rotate, translate_arg)
+    return new_translate
+
 

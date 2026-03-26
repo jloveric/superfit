@@ -5,8 +5,6 @@ import numpy as np
 from sysl.shader.shader_module import register_shader_module
 from sysl.shader.shader_templates.common import CONSTANTS
 
-
-
 SFSPShader = register_shader_module("""
 @name SFSP
 @inputs pos, size, params, onion_ratio
@@ -21,6 +19,18 @@ float SFSP(vec3 p, vec3 size, vec4 params, float onion_ratio)
     float scale = params.z;
     float bulge_ratio = params.w;
     return SuperFrustum(p, size, roundness, dilate_3d, scale, bulge_ratio, onion_ratio);
+}""")
+
+SPPSPShader = register_shader_module("""
+@name SPPSP
+@inputs pos, size, params, onion_ratio
+@outputs dist
+@dependencies SPProto
+@vardeps 
+
+float SPPSP(vec3 p, vec3 size, vec4 roundess, vec4 doe)
+{
+    return SPProto(p, size, roundess, doe.x, doe.y, doe.zw);
 }""")
 
 SGSPShader = register_shader_module("""

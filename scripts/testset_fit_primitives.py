@@ -8,7 +8,7 @@ import _pickle as cPickle
 from geolipi.torch_compute import recursive_evaluate, Sketcher
 from superfit.algos.resfit import resfit
 from superfit.utils.mesh_preprocess import process_mesh_to_sdf, cd_based_process_mesh_to_sdf, normalize_to_unit_cube
-from superfit.utils.config import AlgorithmConfig as AlgConf
+from superfit.utils.config import AlgorithmConfig as AlgConf, initialize_seeds
 from superfit.utils.stats import Stats
 from superfit.utils.logger import logger
 from superfit.utils.constants import AOT_ARTIFACT_DIR, SAVE_DIR_BASE, PARTOBJAVERSE_INSTANCE_DIR
@@ -18,8 +18,7 @@ from superfit.utils.io import to_cpu_recursive
 
 
 th.set_float32_matmul_precision("medium")
-th.backends.cudnn.benchmark = True
-th._dynamo.config.cache_size_limit = 32
+th._dynamo.config.cache_size_limit = 64
 th.autograd.set_detect_anomaly(True)
 
 def parse_args():
@@ -33,6 +32,7 @@ def parse_args():
     parser.add_argument("--overwrite", action="store_true", required=False, default=False, help="Overwrite existing save files")
     parser.add_argument("--save_dir", type=str, default=SAVE_DIR_BASE, help="Save directory")
     parser.add_argument("--aot_postfix", type=str, default="aott", help="AOT postfix")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed used for optimization.")
     return parser.parse_args()
 
 def load_partobjaverse_annotations(input_mesh_file):
@@ -45,12 +45,12 @@ def load_partobjaverse_annotations(input_mesh_file):
     original_annotations = np.load(instance_id_path)
     return original_mesh, original_annotations
 
-def shape_wise_resfit(input_mesh_file, save_dir, fastmode, ablation):
+def shape_wise_resfit(input_mesh_file, save_dir, fastmode, ablation, aot_postfix):
     """Process a single mesh file with resfit algorithm."""
     config_options.main_setting()
     config_options.set_config_ablation(ablation, fastmode=fastmode)
     
-    AlgConf.AOT_ARTIFACT_FILE = os.path.join(AOT_ARTIFACT_DIR, f"aot_artifact_{args.aot_postfix}_{ablation}.pt")    
+    AlgConf.AOT_ARTIFACT_FILE = os.path.join(AOT_ARTIFACT_DIR, f"aot_artifact_{aot_postfix}_{ablation}.pt")
     
     if not os.path.exists(save_dir):
         os.makedirs(save_dir, exist_ok=True)
@@ -62,7 +62,11 @@ def shape_wise_resfit(input_mesh_file, save_dir, fastmode, ablation):
     save_file = os.path.join(save_dir, "primitive_assembly.pkl")
     sketcher_3d = Sketcher(resolution=AlgConf.DATA_RESOLUTION, n_dims=3)
     
-    mesh, target_sdf, cd_avg = cd_based_process_mesh_to_sdf(input_mesh_file, sketcher_3d)
+    if AlgConf.OLD_MESH_PROCESS:
+        mesh, target_sdf = process_mesh_to_sdf(input_mesh_file, sketcher_3d)
+        cd_avg = -1.0
+    else:
+        mesh, target_sdf, cd_avg = cd_based_process_mesh_to_sdf(input_mesh_file, sketcher_3d)
 
     if not mesh.is_watertight:
         raise ValueError(f"------- Non Watertight Mesh -------")
@@ -83,6 +87,9 @@ def shape_wise_resfit(input_mesh_file, save_dir, fastmode, ablation):
 
 def main(args):
     """Main function that processes all meshes based on the selected dataset."""
+    initialize_seeds(seed=args.seed)
+    th.backends.cudnn.benchmark = True
+
     # Load mesh paths based on dataset
     if args.dataset == "toys4k":
         mesh_paths = load_toy4k_mesh_paths()
@@ -114,7 +121,7 @@ def main(args):
                 folder_name = os.path.splitext(os.path.basename(input_mesh_file))[0]
             
             # Set save directory
-            save_dir = os.path.join(args.save_dir, args.dataset, f"ablation_{args.ablation}_v4", folder_name)
+            save_dir = os.path.join(args.save_dir, args.dataset, f"ablation_{args.ablation}_v6", folder_name)
             
             # Check if save file exists and skip if overwrite is False
             save_file = os.path.join(save_dir, "primitive_assembly.pkl")
@@ -133,7 +140,7 @@ def main(args):
             logger.info(f"  Output: {save_dir}")
             
             # Process the mesh
-            shape_wise_resfit(input_mesh_file, save_dir, args.fastmode, args.ablation)
+            shape_wise_resfit(input_mesh_file, save_dir, args.fastmode, args.ablation, args.aot_postfix)
             logger.info("="*50)
             logger.info("="*50)
             logger.info(f"Successfully processed index {idx}: {folder_name}\n")

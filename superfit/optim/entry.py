@@ -14,11 +14,9 @@ from .primitive_registry import HANDLER_REGISTRY
 from ..symbolic.utils import gather_primitives
 from .expr_conversion import convert_to_packed, convert_to_unpacked, convert_to_batched, convert_to_unbatched
 from .param_conversion import transform_to_tunable
-from .main_opt import run_optimization_loop
-# from .fast_opt import run_optimization_loop_fast
-from .fast_opt_new import run_optimization_loop_fast
+from .fast_opt import run_optimization_loop_fast
 from ..algos.eval_tools import get_recon_measure, MeasurePack
-from .compile_function import compile_program_jit, compile_cached_with_dummy_opt
+from .compile_function import compile_cached_with_dummy_opt
 import trimesh
 from ..utils.mesh_preprocess import quick_sample_points
 
@@ -75,11 +73,8 @@ def optimize_primitive_assembly(in_program, target_mesh, target_sdf, sketcher,
         temperature = 1.0
         gmbled_opt_program = inject_temp_param(opt_program.tensor(dtype=AlgConf.OPT_DTYPE), temperature)
         
-        if AlgConf.FastMode:
-            compiled_func_relaxed = compile_cached_with_dummy_opt(gmbled_opt_program, sketcher, handler, torch_compile=AlgConf.TorchCompile)
-            # compiled_func_relaxed = compile_program_jit_cached(gmbled_opt_program, sketcher, torch_compile=torch_compile)
-        else:
-            compiled_func_relaxed = compile_program_jit(gmbled_opt_program, sketcher, torch_compile=AlgConf.TorchCompile)
+        compiled_ops = compile_cached_with_dummy_opt(gmbled_opt_program, sketcher, handler, torch_compile=AlgConf.TorchCompile)
+        # compiled_func_relaxed = compile_program_jit_cached(gmbled_opt_program, sketcher, torch_compile=torch_compile)
         
         # Create parameter groups with different learning rates
         param_groups = []
@@ -111,7 +106,7 @@ def optimize_primitive_assembly(in_program, target_mesh, target_sdf, sketcher,
             variable_list=variable_list,
             tensor_list=tensor_list,
             param_groups=param_groups,
-            compiled_ops=compiled_func_relaxed,
+            compiled_ops=compiled_ops,
             render_mode=AlgConf.RENDER_MODE,
             render_iter=AlgConf.RENDER_ITER,
             post_prune=post_prune,

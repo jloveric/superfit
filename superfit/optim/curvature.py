@@ -1,3 +1,8 @@
+"""
+This file contains the code for computing the curvature weights for the points on the mesh using IGL.
+Ideally use: https://www.cs.umd.edu/~varshney/papers/mesh_saliency_sig05.pdf
+to compute the curvature weights for the points on the mesh.
+"""
 import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
@@ -202,7 +207,7 @@ def curvature_to_weight(C_pts, Cmin=5.0, Cmax=50.0, steepness=5.0):
     return w
 
 # ---------- Multi-scale curvedness ----------
-def multiscale_curvedness_igl(V, F, sigmas=None, combine='meah'):
+def multiscale_curvedness_igl(V, F, sigmas=None, combine='mean'):
     """
     Compute per-vertex curvedness (from principal curvatures) and smooth it
     over multiple scales with heat diffusion. Returns:
@@ -216,7 +221,7 @@ def multiscale_curvedness_igl(V, F, sigmas=None, combine='meah'):
     L, M, ell = igl_cotan_and_mass(V, F)
     if sigmas is None:
         # Pick scales relative to mean edge length
-        sigmas = [0.5*ell, 1.0*ell, 2.0*ell]
+        sigmas = [0.5*ell, 1.0*ell, 2.0*ell, 5*ell]
         # sigmas =[10.0,] * 100
         # sigmas = [0.15*ell]
     C_scales = []

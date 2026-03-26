@@ -8,7 +8,6 @@ from ...torch_compute.batched_others import (
     batched_sq_packed_stochastic_eval,
     batched_varaxis_sq_packed_stochastic_eval,
 )
-from ..losses import get_param_loss_sf
 from .utils import (
     build_transform_constants,
     make_packed_param_to_var,
@@ -83,6 +82,31 @@ def reinit_params_varaxis_sq(prim_expr, prim_param):
 
 
 
+
+def get_param_loss_cuboid(transformed_params):
+    prim_params, su_ops, logits, temperature = transformed_params
+    su_loss = su_ops.sum()
+    temperature = transformed_params[-1]
+    logits = transformed_params[-2]
+    # SHould this also have GMBL noise? 
+    soft = th.softmax(logits / temperature, dim=-1)
+    prim_size_loss = prim_params[:, 3:6].sum(dim=-1)
+    loss = su_loss + (prim_size_loss * soft[:, 0]).sum()
+    return loss
+    
+
+def get_param_loss_sq(transformed_params):
+    prim_params, su_ops, logits, temperature = transformed_params
+    su_loss = su_ops.sum()
+    temperature = transformed_params[-1]
+    logits = transformed_params[-2]
+    # SHould this also have GMBL noise? 
+    soft = th.softmax(logits / temperature, dim=-1)
+    prim_size_loss = prim_params[:, 3:6].sum(dim=-1)
+    loss = su_loss + (prim_size_loss * soft[:, 0]).sum()
+    return loss
+    
+
 # ========================== Handlers ========================================
 
 @register_handler
@@ -108,7 +132,7 @@ class SQHandler(PrimitiveHandler):
         1: "sp_roundness_e1",
         2: "sp_roundness_e2",
     }
-    get_param_loss = get_param_loss_sf
+    get_param_loss = get_param_loss_sq
 
 @register_handler
 class CuboidHandler(PrimitiveHandler):
@@ -131,7 +155,7 @@ class CuboidHandler(PrimitiveHandler):
     PARAM_IND_TO_NAME = {
         0: "sp_size",
     }
-    get_param_loss = get_param_loss_sf
+    get_param_loss = get_param_loss_cuboid
 @register_handler
 class VarAxisSQHandler(PrimitiveHandler):
     base_class = sps.VarAxisSQ
@@ -153,4 +177,4 @@ class VarAxisSQHandler(PrimitiveHandler):
     PARAM_IND_TO_NAME = {
         0: "sp_size",
     }
-    get_param_loss = get_param_loss_sf
+    get_param_loss = get_param_loss_sq

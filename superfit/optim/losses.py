@@ -4,7 +4,8 @@ from ..utils.config import AlgorithmConfig as AlgConf
 from ..torch_compute.compile_friendly import sample_gumbel
 from ..utils.logger import logger
 PARAM_MUL = 1e6
-ON_CONST = 100
+ON_CONST_B = 100
+ON_CONST_A = 5000
 
 def get_batched_overlap_loss(prim_execs, full_execution, scale_factor):
     # Fuse operations where possible
@@ -54,20 +55,23 @@ def get_primitive_count_loss(transformed_params):
 def get_param_loss_sf(transformed_params):
     prim_params, su_ops, logits, temperature = transformed_params
     su_loss = su_ops.sum()
+    temperature = transformed_params[-1]
+    logits = transformed_params[-2]
+    # SHould this also have GMBL noise? 
+    soft = th.softmax(logits / temperature, dim=-1)
     
-    prim_size_loss = prim_params[:, 3:6].sum()
-    # lower_bound_scale = prim_params[:, 3:6] * prim_params[:, 8:9]
-    # lower_bound_loss = th.where(lower_bound_scale < 0.01, -lower_bound_scale * PARAM_MUL, th.zeros_like(lower_bound_scale)).sum()
-    # prim_loss = prim_size_loss + lower_bound_loss
+    prim_size_loss = prim_params[:, 3:6].sum(dim=-1)
     onion_param = th.clamp(prim_params[:, 10:11] - prim_params[:, 7:8], min=0.5)
-    onion_loss = th.sum(ON_CONST * th.pow(onion_param, ON_CONST))
+    onion_loss = ON_CONST_A * th.pow(onion_param, ON_CONST_B).sum(dim=-1)
     # dilation_loss = prim_params[:, 11:12].sum()
-    loss = su_loss + prim_size_loss + onion_loss
+
+    loss = su_loss + ((prim_size_loss + onion_loss) * soft[:, 0]).sum()
     return loss
     
 
 def compute_total_loss(output_shape_occ, hard_target_fl, 
                  output_surface_adj_occ, hard_target_surface_adj_fl, 
+                 output_surface_adj_sdf, surface_sampled_sdf,
                  output_surface_sdf,
                  primitive_sdfs, output_sdf, 
                  mask_shape, mask_surface, mask_surface_adj,
@@ -88,7 +92,7 @@ def compute_total_loss(output_shape_occ, hard_target_fl,
     loss_surface_adj_occ = 0.5 * (mask_surface_adj * delta_surface_adj).sum() / (mask_surface_adj_sum + 1e-8)
     
     # Surface SDF loss
-    delta_surface_sdf = th.abs(output_surface_sdf)# ** 2
+    delta_surface_sdf = th.abs(output_surface_sdf) ** 2
     # delta_surface_sdf = th.nn.functional.leaky_relu(output_surface_sdf)# ** 2
     delta_surface_sdf = delta_surface_sdf * (1 + curvature_weights)
     # Could make it one sided?
@@ -100,14 +104,19 @@ def compute_total_loss(output_shape_occ, hard_target_fl,
     overlap_loss = get_batched_overlap_loss(primitive_sdfs, output_sdf, scale_factor)
     shape_unoverlap_loss = get_batched_shape_unoverlap_loss(primitive_sdfs, output_sdf, scale_factor)
 
+    surf_adj_sdf_delta = (output_surface_adj_sdf - surface_sampled_sdf) ** 2
+    surf_adj_sdf_delta = surf_adj_sdf_delta * (1 + curvature_weights)
+    loss_surface_adj_sdf = 0.5 * (mask_surface_adj * surf_adj_sdf_delta).sum() / (mask_surface_adj_sum + 1e-8)
+    
     # Build total loss more efficiently
     total_loss = (AlgConf.LOSS_OCC_ALPHA * loss_shape_occ + 
+                    AlgConf.LOSS_SURFACE_ADJ_OCC_ALPHA * loss_surface_adj_occ + 
+                    AlgConf.LOSS_SURFACE_SDF_ALPHA * loss_surface_sdf +
+                    AlgConf.LOSS_SURFACE_ADJ_SDF_ALPHA * loss_surface_adj_sdf +
                     AlgConf.LOSS_PRIMITIVE_COUNT_ALPHA * primitive_count_loss + 
                     AlgConf.LOSS_OVERLAP_ALPHA * overlap_loss + 
-                    AlgConf.LOSS_SHAPE_UNOVERLAP_ALPHA * shape_unoverlap_loss +
+                    AlgConf.LOSS_SHAPE_UNOVERLAP_ALPHA * shape_unoverlap_loss)
                     # AlgConf.LOSS_PARAM_REGULARIZATION_ALPHA * param_loss + \
-                    AlgConf.LOSS_SURFACE_ADJ_OCC_ALPHA * loss_surface_adj_occ + 
-                    AlgConf.LOSS_SURFACE_SDF_ALPHA * loss_surface_sdf)
     return total_loss
 
 

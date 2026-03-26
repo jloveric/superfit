@@ -33,7 +33,7 @@ CD_RES = 2048
 CD_MULTIPLIER = 100.0
 # Dilated IOU for avoiding thin parts. 
 VOX_IOU_DILATE_THRESHOLD = 0.05
-MIX_IOU_RATIO = 0.15
+MIX_IOU_RATIO = 1.0
 
 class MeasurePack:
 

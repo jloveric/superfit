@@ -204,13 +204,19 @@ def perform_batched_stochastic_precondition(base_coords, i, base_iters, init_val
     return base_coords
 
 
-def perform_batched_stochastic_precondition_with_curvature(base_coords, i, base_iters, init_value, curvature_weights):
+def perform_batched_stochastic_precondition_with_curvature(base_coords, i, base_iters, cut_value, full_value, curvature_weights):
     final_val = 0
     frac = min(i / (base_iters), 1.0)
-    alpha = init_value * (1 - frac) + final_val * frac
+    alpha = 1 * (1 - frac) + final_val * frac
     # More efficient noise generation
+    # for places with low curvature -> use what would happen with full value.
+    # for places with high curvature -> use what would happen with cut value.
     max_value = max(th.max(curvature_weights), 1.0)
-    noise = th.randn_like(base_coords) * alpha * (max_value - curvature_weights)
+    curvature_ratio = (max_value - curvature_weights)
+    # high curvature -> low curvature ratio -> more cutoff value.
+
+    # noise = th.randn_like(base_coords) * alpha * (max_value - curvature_weights)
+    noise = th.randn_like(base_coords) * (full_value * curvature_ratio + cut_value * (1 - curvature_ratio)) * alpha
     base_coords = base_coords + noise
     return base_coords
 

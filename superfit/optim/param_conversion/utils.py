@@ -17,7 +17,7 @@ RANGE_DICT = {
     "sp_roundness": (0.0,   OPT_MAX_SCALE / 2.0),
     "sp_dilate_3d": (0.0,   OPT_MAX_SCALE / 4.0),
     "sp_taper": (OPT_MIN_SCALE,   OPT_MAX_SCALE),
-    "sp_bulge":     (OPT_MIN_SCALE,   OPT_MAX_SCALE),
+    "sp_bulge":     (-OPT_MAX_SCALE,   OPT_MAX_SCALE),
     "sp_onion_ratio": (0,   OPT_MAX_SCALE/2.0),
     "sp_logits": (-2.5, 2.5),
     "sp_extrussion": (0.0,   OPT_MAX_SCALE / 2.0),

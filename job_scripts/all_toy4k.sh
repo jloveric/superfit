@@ -66,8 +66,8 @@ for ((gpu=0; gpu<NUM_GPUS; gpu++)); do
         # Activate conda environment
         conda activate sfn
         cd "$SCRIPT_DIR"
-        python scripts/testset_fit_primitives.py --start_ind $CURRENT_START --end_ind $CURRENT_END --ablation $ABLATION --fastmode  --overwrite --aot_postfix $AOT_POSTFIX
-        # python scripts/testset_fit_partwise.py --start_ind $CURRENT_START --end_ind $CURRENT_END --ablation $ABLATION --fastmode --overwrite --aot_postfix $AOT_POSTFIX
+        python scripts/testset_fit_primitives.py --start_ind $CURRENT_START --end_ind $CURRENT_END --ablation $ABLATION --fastmode --aot_postfix $AOT_POSTFIX --dataset partobjaverse
+        # python scripts/testset_fit_partwise.py --start_ind $CURRENT_START --end_ind $CURRENT_END --ablation $ABLATION --fastmode  --aot_postfix $AOT_POSTFIX
         # python scripts/testset_fit_primitives.py --start_ind $CURRENT_START --end_ind $CURRENT_END --ablation $ABLATION --fastmode --overwrite --aot_postfix $AOT_POSTFIX --dataset partobjaverse
         # python scripts/texture_on_testset.py --start_ind $CURRENT_START --end_ind $CURRENT_END --input_dir /users/aganesh8/data/aganesh8/data/project_neo/outputs/partobjaverse/ablation_2_param --save_html
     ) > "${LOG_DIR}/proc_${gpu}_${AOT_POSTFIX}.out" 2>&1 &

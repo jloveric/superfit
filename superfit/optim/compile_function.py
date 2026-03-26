@@ -17,21 +17,6 @@ from .losses import compute_semantic_loss
 from .param_conversion.sf_handler import make_point2prim_distr_smu
 N_OPT_ITERS = 5
 
-def compile_program_jit(in_program, sketcher, handler: PrimitiveHandler,
-            isolated_vars=True,
-            torch_compile=False):
-    # This is the old pass. 
-    # In the new version we literally give the compiled function directly. 
-    opt_program, _ = in_program.tensor(dtype=AlgConf.OPT_DTYPE).get_varnamed_expr()
-    compiled_func_relaxed, func_def, _ = unroll_expression(opt_program, sketcher, 
-        isolated_vars=isolated_vars, param_mode="varlist", relaxed_eval=True)
-    logger.debug(ast.unparse(func_def))
-    logger.debug(opt_program.sympy().pretty_print())
-    if torch_compile:
-        # JIT compilation is too slow as it has to be done many times!
-        compiled_func_relaxed = th.compile(compiled_func_relaxed, mode="reduce-overhead", fullgraph=True)
-    return compiled_func_relaxed
-
 @dataclass(slots=True)
 class CompiledOps:
     compiled_assembly_execution: Callable[..., Any] = None
@@ -112,6 +97,7 @@ def compile_cached_with_dummy_opt(in_program, sketcher,
 
     def total_loss_with_params(output_shape_occ, hard_target_fl, 
                  output_surface_adj_occ, hard_target_surface_adj_fl, 
+                 output_surface_adj_sdf, surface_sampled_sdf,
                  output_surface_sdf,
                  primitive_sdfs, output_sdf, 
                  mask_shape, mask_surface, mask_surface_adj,
@@ -119,6 +105,7 @@ def compile_cached_with_dummy_opt(in_program, sketcher,
                  scale_factor, curvature_weights, base_curvature_weights):
         loss_1 = compute_total_loss(output_shape_occ, hard_target_fl, 
                  output_surface_adj_occ, hard_target_surface_adj_fl, 
+                 output_surface_adj_sdf, surface_sampled_sdf,
                  output_surface_sdf,
                  primitive_sdfs, output_sdf, 
                  mask_shape, mask_surface, mask_surface_adj,
@@ -177,6 +164,9 @@ def compile_cached_with_dummy_opt(in_program, sketcher,
     hard_target_surface_adj_fl = th.randn(SURF_SIZE, dtype=dtype, device=device).clone().detach().requires_grad_(False)
     mask_surface_adj = th.randn(SURF_SIZE, dtype=dtype, device=device).clone().detach().requires_grad_(False)
     _curvature_weights = th.randn(SURF_SIZE, dtype=dtype, device=device).clone().detach().requires_grad_(False)
+
+    output_surface_adj_sdf = th.randn(SURF_SIZE, dtype=dtype, device=device).clone().detach().requires_grad_(True)
+    surface_sampled_sdf = th.randn(SURF_SIZE, dtype=dtype, device=device).clone().detach().requires_grad_(False)
     
     output_surface_sdf = th.randn(SURF_SIZE, dtype=dtype, device=device).clone().detach().requires_grad_(True)
     mask_surface = th.randn(SURF_SIZE, dtype=dtype, device=device).clone().detach().requires_grad_(False)
@@ -227,6 +217,7 @@ def compile_cached_with_dummy_opt(in_program, sketcher,
         loss_1 = primitive_sdfs.sum() + output_sdf.sum()
         loss_2 = compiled_loss_function(output_shape_occ, hard_target_fl, 
                                         output_surface_adj_occ, hard_target_surface_adj_fl, 
+                                        output_surface_adj_sdf, surface_sampled_sdf,
                                         output_surface_sdf,
                                         primitive_sdfs, output_sdf, 
                                         mask_shape, mask_surface, mask_surface_adj,
