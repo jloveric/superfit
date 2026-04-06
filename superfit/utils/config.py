@@ -1,3 +1,19 @@
+"""
+ADOBE
+
+Copyright 2026 Adobe
+
+All Rights Reserved.
+
+NOTICE: All information contained herein is, and remains
+the property of Adobe and its suppliers, if any. The intellectual
+and technical concepts contained herein are proprietary to Adobe
+and its suppliers and are protected by all applicable intellectual
+property laws, including trade secret and copyright laws.
+Dissemination of this information or reproduction of this material
+is strictly forbidden unless prior written permission is obtained
+from Adobe.
+"""
 from dataclasses import dataclass, field
 
 import dataclasses
@@ -56,14 +72,14 @@ class AlgorithmConfig:
     OPT_STOPPING_IOU: float = 0.99
     MAX_ITER: int = 1000
 
-    LOWER_SP: bool = False
+    LOWER_SP: bool = True
     STOCHASTIC_PRECONDITION_INIT_VAL: float = 2 * np.sqrt(3) * 0.01
     STOCHASTIC_PRECONDITION_INIT_VAL_LOWER: float = 2 * np.sqrt(3) * 0.01
     
     DO_PRUNE: bool = True
 
-    PRIM_TYPE: str = "SuperFrustum"
     # PRIM_TYPE: str = "VarAxisSF"
+    PRIM_TYPE: str = "SuperFrustum"
     SMOOTHEN: bool = True
     
     # OTHER:
@@ -78,29 +94,29 @@ class AlgorithmConfig:
     AOT_ARTIFACT_FILE: str = None
     SAVE_JIT_CACHE: bool = True
     OVERWRITE_JIT_CACHE: bool = False
-    TorchCompile: bool = True
+    TorchCompile: bool = False
     COMPILED_FUNCTIONS: str = None
 
     USE_CURVATURE_WEIGHTS: bool = True
     INTERNAL_CURVATURE_WEIGHTS: bool = True
     CURVATURE_WEIGHTS_SCALE: float = 1.0
     SURFACE_ADJ_PERTURBATION_SCALE: float = 0.05 # 0.05
-    BIDIR: bool = False
+    BIDIR: bool = True
     BIDIR_RESOLUTION: int = 128
     BIDIR_SAMPLE_RATIO: float = 0.75
     
     # Reconstruction Losses:
-    LOSS_OCC_ALPHA: float = 1.0
+    LOSS_OCC_ALPHA: float = 2.0
     LOSS_SURFACE_ADJ_OCC_ALPHA: float = 2.0
-    LOSS_SURFACE_SDF_ALPHA: float = 0.2
-    LOSS_SURFACE_ADJ_SDF_ALPHA: float = 0.0
+    LOSS_SURFACE_SDF_ALPHA: float = 1.0
+    LOSS_SURFACE_ADJ_SDF_ALPHA: float = 1.0
 
     # Quality Losses:
     STOCHASTIC_DROPOUT: bool = True
     LOSS_PRIMITIVE_COUNT_ALPHA: float = 2e-3
-    LOSS_OVERLAP_ALPHA: float = 2e-2
-    LOSS_SHAPE_UNOVERLAP_ALPHA: float = 2e-2
-    LOSS_PARAM_REGULARIZATION_ALPHA: float = 1e-8
+    LOSS_OVERLAP_ALPHA: float = 1e-1
+    LOSS_SHAPE_UNOVERLAP_ALPHA: float = 1e-1
+    LOSS_PARAM_REGULARIZATION_ALPHA: float = 1e-5
 
     # Tversky Loss:
     TVERSKY_MODE: bool = False
@@ -126,7 +142,7 @@ class AlgorithmConfig:
     OLD_MESH_PROCESS: bool = False
 
     # RENDER CONFIGURATION
-    RENDER_MODE: bool = False
+    RENDER_MODE: bool = True
     # Subsample if its an issue.
     RENDER_ITER: int = 5
 
@@ -231,8 +247,6 @@ def cvpr_submission_settings():
     AlgorithmConfig.LOSS_SURFACE_ADJ_SDF_ALPHA: float = 0.0
     AlgorithmConfig.INTERNAL_CURVATURE_WEIGHTS = False
 
-
-
 def high_cost_mode():
     AlgorithmConfig.RENEW_PTS_ITER: int = 100
     AlgorithmConfig.N_SURFACE_POINTS: int = 200_000
@@ -253,10 +267,9 @@ def new_loss_lambda():
     AlgorithmConfig.LOSS_PRIMITIVE_COUNT_ALPHA: float = 2e-3
     AlgorithmConfig.LOSS_OVERLAP_ALPHA: float = 1e-1
     AlgorithmConfig.LOSS_SHAPE_UNOVERLAP_ALPHA: float = 1e-1
-    AlgorithmConfig.LOSS_PARAM_REGULARIZATION_ALPHA: float = 1e-4
+    AlgorithmConfig.LOSS_PARAM_REGULARIZATION_ALPHA: float = 1e-5
     AlgorithmConfig.CURVATURE_WEIGHTS_SCALE = 1.0
     AlgorithmConfig.BIDIR = True
-    AlgorithmConfig.LOSS_SURFACE_ADJ_SDF: bool = True
     AlgorithmConfig.LOWER_SP = True
 
 def initialize_seeds(seed: int = None, use_deterministic: bool = None):
@@ -334,290 +347,26 @@ def set_config_ablation(ablation: int, fastmode: bool = True):
 
     if ablation == 0:
         pass
-    elif ablation == 1:
-        AlgorithmConfig.BIDIR = True
+    if ablation == 1:
+        AlgorithmConfig.PRIM_TYPE = "Cuboid"
     elif ablation == 2:
-        AlgorithmConfig.PRIM_TYPE = "VarAxisSF"
-        AlgorithmConfig.BIDIR = True
+        AlgorithmConfig.PRIM_TYPE = "VarAxisSQ"
     elif ablation == 3:
-        AlgorithmConfig.MPS_LEN_WEIGHT = -5e-3
-        AlgorithmConfig.LOSS_PRIMITIVE_COUNT_ALPHA = 5e-3
-        AlgorithmConfig.LOSS_OVERLAP_ALPHA = 5e-2
-        AlgorithmConfig.LOSS_SHAPE_UNOVERLAP_ALPHA = 5e-2
+        AlgorithmConfig.PRIM_TYPE = "VarAxisSPP"
     elif ablation == 4:
-        AlgorithmConfig.MPS_LEN_WEIGHT = -1e-2
-        AlgorithmConfig.LOSS_PRIMITIVE_COUNT_ALPHA = 1e-2
-        AlgorithmConfig.LOSS_OVERLAP_ALPHA = 1e-1
-        AlgorithmConfig.LOSS_SHAPE_UNOVERLAP_ALPHA = 1e-1
-    elif ablation == 5:
-        AlgorithmConfig.MPS_LEN_WEIGHT = -1e-3
-        AlgorithmConfig.LOSS_PRIMITIVE_COUNT_ALPHA = 1e-2
-        AlgorithmConfig.LOSS_OVERLAP_ALPHA = 1e-1
-        AlgorithmConfig.LOSS_SHAPE_UNOVERLAP_ALPHA = 1e-1
-    elif ablation == 6:
-        AlgorithmConfig.MPS_LEN_WEIGHT = -1e-3
-        AlgorithmConfig.LOSS_PRIMITIVE_COUNT_ALPHA = 1e-2
-        AlgorithmConfig.LOSS_OVERLAP_ALPHA = 1e-1
-        AlgorithmConfig.LOSS_SHAPE_UNOVERLAP_ALPHA = 1e-1
-        AlgorithmConfig.SMOOTHEN = False
-    elif ablation == 9:
-        AlgorithmConfig.OPT_POST_PRUNE = True
-    elif ablation == 10:
-        AlgorithmConfig.REFLECTION_LOSS = True
-        AlgorithmConfig.REFLECTION_LOSS_ALPHA = 2.0
-    elif ablation == 92:
-        AlgorithmConfig.SEMANTIC_LOSS = True
-        AlgorithmConfig.SEMANTIC_LOSS_ALPHA = 1.0
-    elif ablation == 93:
-        AlgorithmConfig.EARLY_STOP = False
-        AlgorithmConfig.PRIM_TYPE = "VarAxisSF"
-        AlgorithmConfig.OPT_POST_PRUNE = True
-        AlgorithmConfig.BIDIR = True
-        AlgorithmConfig.DECOMPOSE_CONFIG = {
-            "min_eroded_part_size_ratio": 0.005,
-            "min_part_size_ratio": 0.0001,
-            "size_limit": 20,
-            "max_msd_iter": 7,
-        }
-        AlgorithmConfig.OPT_RESOLUTION = 128
-        AlgorithmConfig.MPS_LEN_WEIGHT = -5e-3
-        AlgorithmConfig.LOSS_PRIMITIVE_COUNT_ALPHA = 1e-2
-        AlgorithmConfig.LOSS_OVERLAP_ALPHA = 5e-2
-        AlgorithmConfig.LOSS_SHAPE_UNOVERLAP_ALPHA = 5e-2
-    elif ablation == 94:
-        AlgorithmConfig.PRIM_TYPE = "VarAxisSF"
-        AlgorithmConfig.OPT_POST_PRUNE = True
-        AlgorithmConfig.BIDIR = True
-    elif ablation == 95:
-        AlgorithmConfig.EARLY_STOP = False
-        AlgorithmConfig.PRIM_TYPE = "VarAxisSF"
-        AlgorithmConfig.OPT_POST_PRUNE = True
-        AlgorithmConfig.BIDIR = True
-        AlgorithmConfig.DECOMPOSE_CONFIG = {
-            "min_eroded_part_size_ratio": 0.005,
-            "min_part_size_ratio": 0.0001,
-            "size_limit": 20,
-            "max_msd_iter": 7,
-        }
-    elif ablation == 96:
-        AlgorithmConfig.EARLY_STOP = False
-        AlgorithmConfig.PRIM_TYPE = "VarAxisSF"
-        AlgorithmConfig.OPT_POST_PRUNE = True
-        AlgorithmConfig.BIDIR = True
-    elif ablation == 97:
-        AlgorithmConfig.EARLY_STOP = False
-        AlgorithmConfig.PRIM_TYPE = "VarAxisSF"
-        AlgorithmConfig.OPT_POST_PRUNE = True
-        AlgorithmConfig.BIDIR = True
-        AlgorithmConfig.MPS_LEN_WEIGHT = -5e-3
-        AlgorithmConfig.LOSS_PRIMITIVE_COUNT_ALPHA = 1e-2
-        AlgorithmConfig.LOSS_OVERLAP_ALPHA = 1e-1
-        AlgorithmConfig.LOSS_SHAPE_UNOVERLAP_ALPHA = 1e-1
-        AlgorithmConfig.DECOMPOSE_CONFIG = {
-            "min_eroded_part_size_ratio": 0.005,
-            "min_part_size_ratio": 0.0001,
-            "size_limit": 20,
-            "max_msd_iter": 10,
-        }
-    elif ablation == 98:
-        AlgorithmConfig.PRIM_TYPE = "VarAxisSF"
-        AlgorithmConfig.OPT_POST_PRUNE = True
-        AlgorithmConfig.BIDIR = True
-        AlgorithmConfig.MPS_LEN_WEIGHT = -5e-3
-        AlgorithmConfig.LOSS_PRIMITIVE_COUNT_ALPHA = 1e-2
-        AlgorithmConfig.LOSS_OVERLAP_ALPHA = 1e-1
-        AlgorithmConfig.LOSS_SHAPE_UNOVERLAP_ALPHA = 1e-1
-        AlgorithmConfig.DECOMPOSE_CONFIG = {
-            "min_eroded_part_size_ratio": 0.005,
-            "min_part_size_ratio": 0.0001,
-            "size_limit": 20,
-            "max_msd_iter": 10,
-        }
-    elif ablation == 99:
-        AlgorithmConfig.OPT_POST_PRUNE = True
-        AlgorithmConfig.BIDIR = True
-        AlgorithmConfig.MPS_LEN_WEIGHT = -1e-3
-        AlgorithmConfig.LOSS_PRIMITIVE_COUNT_ALPHA = 5e-3
-        AlgorithmConfig.LOSS_OVERLAP_ALPHA = 1e-1
-        AlgorithmConfig.LOSS_SHAPE_UNOVERLAP_ALPHA = 1e-1
-    elif ablation == 11:
-        AlgorithmConfig.PRIM_TYPE = "VarAxisSPP"
-        AlgorithmConfig.BIDIR = True
-    elif ablation == 12:
         AlgorithmConfig.PRIM_TYPE = "VarAxisSG"
-        # AlgorithmConfig.OPT_POST_PRUNE = True
-        AlgorithmConfig.BIDIR = True
-    elif ablation == 13:
-        AlgorithmConfig.SEMANTIC_LOSS = True
-        AlgorithmConfig.SEMANTIC_LOSS_ALPHA = 2.0
-    elif ablation == 14:
-        AlgorithmConfig.PRIM_TYPE = "VarAxisSPP"
-        AlgorithmConfig.BIDIR = True
-        new_loss_lambda()
-    elif ablation == 15:
-        AlgorithmConfig.PRIM_TYPE = "VarAxisSF"
-        AlgorithmConfig.BIDIR = True
-        new_loss_lambda()
-    elif ablation == 16:
-        # OLD
+    elif ablation == 5:
+        # Original Submission
+        AlgorithmConfig.PRIM_TYPE = "SuperFrustum"
         cvpr_submission_settings()
-    elif ablation == 17:
-        # New
-        AlgorithmConfig.PRIM_TYPE = "VarAxisSF"
-        AlgorithmConfig.BIDIR = True
-        new_loss_lambda()
-        AlgorithmConfig.TVERSKY_MODE = False
-        AlgorithmConfig.LOSS_SURFACE_ADJ_SDF: bool = True
-        AlgorithmConfig.LOSS_SURFACE_ADJ_SDF_ALPHA: float = 1.0
-    elif ablation == 18:
-        # Lower SP
-        AlgorithmConfig.PRIM_TYPE = "VarAxisSF"
-        AlgorithmConfig.BIDIR = True
-        new_loss_lambda()
-        AlgorithmConfig.TVERSKY_MODE = False
-        AlgorithmConfig.LOSS_SURFACE_ADJ_SDF: bool = True
-        AlgorithmConfig.LOSS_SURFACE_ADJ_SDF_ALPHA: float = 1.0
-        AlgorithmConfig.LOWER_SP = True
-    elif ablation == 19:
-        #ADD TVERSKY
-        AlgorithmConfig.PRIM_TYPE = "VarAxisSF"
-        AlgorithmConfig.BIDIR = True
-        new_loss_lambda()
-        AlgorithmConfig.TVERSKY_MODE = True
-        AlgorithmConfig.LOSS_SURFACE_ADJ_SDF: bool = True
-        AlgorithmConfig.LOSS_SURFACE_ADJ_SDF_ALPHA: float = 1.0
-        AlgorithmConfig.LOWER_SP = True
-    elif ablation == 20:
-        # ADD GRADUAL LOSS WEIGHTS
-        AlgorithmConfig.PRIM_TYPE = "VarAxisSF"
-        AlgorithmConfig.BIDIR = True
-        new_loss_lambda()
-        AlgorithmConfig.TVERSKY_MODE = False
-        AlgorithmConfig.LOSS_SURFACE_ADJ_SDF: bool = True
-        AlgorithmConfig.LOSS_SURFACE_ADJ_SDF_ALPHA: float = 1.0
-        AlgorithmConfig.LOWER_SP = True
-    elif ablation == 21:
-        AlgorithmConfig.PRIM_TYPE = "VarAxisSF"
-        AlgorithmConfig.BIDIR = True
-        AlgorithmConfig.LOSS_PARAM_REGULARIZATION_ALPHA = 1e-4
-        new_loss_lambda()
-        AlgorithmConfig.TVERSKY_MODE = False
-        AlgorithmConfig.LOSS_SURFACE_ADJ_SDF: bool = True
-        AlgorithmConfig.LOSS_SURFACE_ADJ_SDF_ALPHA: float = 1.0
-        AlgorithmConfig.LOWER_SP = True
-        AlgorithmConfig.PRUNE_METRIC: str = "cd"
-    elif ablation == 22:
-        AlgorithmConfig.PRIM_TYPE = "VarAxisSF"
-        AlgorithmConfig.BIDIR = True
-        new_loss_lambda()
-        AlgorithmConfig.LOSS_SURFACE_ADJ_SDF: bool = True
-        AlgorithmConfig.LOSS_SURFACE_ADJ_SDF_ALPHA: float = 1.0
-        AlgorithmConfig.LOWER_SP = True
-        AlgorithmConfig.SEMANTIC_LOSS = True
-        AlgorithmConfig.SEMANTIC_LOSS_ALPHA = 1.0
-        # Only stop when quite sure. 
-        AlgorithmConfig.EARLY_STOP_ITER: int = 1
-        # Using Tversky loss. 
-        # Add CD+SurfaceIOU Metric
-    elif ablation == 23:
-        AlgorithmConfig.PRIM_TYPE = "VarAxisSF"
-        AlgorithmConfig.BIDIR = True
-        new_loss_lambda()
-        AlgorithmConfig.LOSS_SURFACE_ADJ_SDF: bool = True
-        AlgorithmConfig.LOSS_SURFACE_ADJ_SDF_ALPHA: float = 1.0
-        AlgorithmConfig.SURFACE_ADJ_PERTURBATION_SCALE: float = 0.05 # 0.05
-        AlgorithmConfig.LOSS_OCC_ALPHA: float = 0.0
-        AlgorithmConfig.LOSS_SURFACE_ADJ_OCC_ALPHA: float = 0.0
-        AlgorithmConfig.LOSS_SURFACE_SDF_ALPHA: float = 1.0
-    elif ablation == 24:
-        # ADD GRADUAL LOSS WEIGHTS
-        AlgorithmConfig.PRIM_TYPE = "VarAxisSF"
-        AlgorithmConfig.BIDIR = True
-        new_loss_lambda()
-        AlgorithmConfig.TVERSKY_MODE = False
-        AlgorithmConfig.LOSS_SURFACE_ADJ_SDF: bool = True
-        AlgorithmConfig.LOSS_SURFACE_ADJ_SDF_ALPHA: float = 1.0
-        AlgorithmConfig.LOWER_SP = True
-        AlgorithmConfig.GRADUAL_LOSS_WEIGHTS = False
-        AlgorithmConfig.LOSS_OVERLAP_ALPHA = 1e-1
-        AlgorithmConfig.LOSS_SHAPE_UNOVERLAP_ALPHA = 5e-2
-    elif ablation == 25:
-        # ADD GRADUAL LOSS WEIGHTS
-        AlgorithmConfig.PRIM_TYPE = "VarAxisSF"
-        AlgorithmConfig.BIDIR = True
-        new_loss_lambda()
-        AlgorithmConfig.TVERSKY_MODE = False
-        AlgorithmConfig.LOSS_SURFACE_ADJ_SDF: bool = True
-        AlgorithmConfig.LOSS_SURFACE_ADJ_SDF_ALPHA: float = 1.0
-        AlgorithmConfig.LOWER_SP = True
-        # AlgorithmConfig.GRADUAL_LOSS_WEIGHTS = False
-        # AlgorithmConfig.LOSS_OVERLAP_ALPHA = 1e-1
-        # AlgorithmConfig.LOSS_SHAPE_UNOVERLAP_ALPHA = 5e-2
-        #  SF and CD. 
-        AlgorithmConfig.PRUNE_METRIC: str = "surface_iou_wt_curvature_and_vox_iou"
-    elif ablation == 26:
-        # Init Prob
-        AlgorithmConfig.PRIM_TYPE = "VarAxisSF"
-        AlgorithmConfig.BIDIR = True
-        new_loss_lambda()
-        AlgorithmConfig.TVERSKY_MODE = False
-        AlgorithmConfig.LOSS_SURFACE_ADJ_SDF: bool = True
-        AlgorithmConfig.LOSS_SURFACE_ADJ_SDF_ALPHA: float = 1.0
-        AlgorithmConfig.LOWER_SP = True
-        # AlgorithmConfig.GRADUAL_LOSS_WEIGHTS = False
-        # AlgorithmConfig.LOSS_OVERLAP_ALPHA = 1e-1
-        # AlgorithmConfig.LOSS_SHAPE_UNOVERLAP_ALPHA = 5e-2
-        # Lower Init Likelihood. 
-        AlgorithmConfig.DEFAULT_LOGITS_RESTART_VALUES: list[float] = (1.5, -1.5)
-    elif ablation == 27:
-        # Onion Loss
-        AlgorithmConfig.PRIM_TYPE = "VarAxisSF"
-        AlgorithmConfig.BIDIR = True
-        new_loss_lambda()
-        AlgorithmConfig.TVERSKY_MODE = False
-        AlgorithmConfig.LOSS_SURFACE_ADJ_SDF: bool = True
-        AlgorithmConfig.LOSS_SURFACE_ADJ_SDF_ALPHA: float = 1.0
-        AlgorithmConfig.LOWER_SP = True
-        # AlgorithmConfig.GRADUAL_LOSS_WEIGHTS = False
-        # AlgorithmConfig.LOSS_OVERLAP_ALPHA = 1e-1
-        # AlgorithmConfig.LOSS_SHAPE_UNOVERLAP_ALPHA = 5e-2
-        # Lower Init Likelihood. 
-        # AlgorithmConfig.DEFAULT_LOGITS_RESTART_VALUES: list[float] = (1.0, -1.0)
-        #  better Curvature weights & Lower noise based on that.
-        # Curvature more global than local.
-    
-        # Add loss to onion op? 
-        # Best fit locally best fit together.
-        # Gradual introduction of overlap unoverlap. 
-    elif ablation == 28:
-        # Onion Loss
-        AlgorithmConfig.PRIM_TYPE = "VarAxisSF"
-        AlgorithmConfig.BIDIR = True
-        new_loss_lambda()
-        AlgorithmConfig.TVERSKY_MODE = False
-        AlgorithmConfig.LOSS_SURFACE_ADJ_SDF: bool = True
-        AlgorithmConfig.LOSS_SURFACE_ADJ_SDF_ALPHA: float = 1.0
-        AlgorithmConfig.LOWER_SP = True
-        # AlgorithmConfig.GRADUAL_LOSS_WEIGHTS = False
-        # AlgorithmConfig.LOSS_OVERLAP_ALPHA = 1e-1
-        # AlgorithmConfig.LOSS_SHAPE_UNOVERLAP_ALPHA = 5e-2
-    elif ablation == 30:
-        AlgorithmConfig.PRIM_TYPE = "VarAxisSF"
-        AlgorithmConfig.BIDIR = True
-        new_loss_lambda()
-        AlgorithmConfig.LOSS_SURFACE_ADJ_SDF: bool = True
-        AlgorithmConfig.LOSS_SURFACE_ADJ_SDF_ALPHA: float = 1.0
-        AlgorithmConfig.LOWER_SP = False
+    elif ablation == 6:
+        # Solid Primitives. 
+        AlgorithmConfig.PRIM_TYPE = "SolidSF"
 
-        AlgorithmConfig.RESFIT_MAX_ITER: int = 3
-        AlgorithmConfig.DECOMPOSE_CONFIG = {
-            "min_eroded_part_size_ratio": 0.005,
-            "min_part_size_ratio": 0.0001,
-            "size_limit": 20,
-            "max_msd_iter": 10,
-        }
-        AlgorithmConfig.LOSS_PRIMITIVE_COUNT_ALPHA: float = 1e-2
-    elif ablation == 31:
+
+
+
+    if ablation == 31:
         AlgorithmConfig.PRIM_TYPE = "VarAxisSF"
         new_loss_lambda()
     elif ablation == 32:

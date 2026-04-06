@@ -1,4 +1,19 @@
 """
+ADOBE
+
+Copyright 2026 Adobe
+
+All Rights Reserved.
+
+NOTICE: All information contained herein is, and remains
+the property of Adobe and its suppliers, if any. The intellectual
+and technical concepts contained herein are proprietary to Adobe
+and its suppliers and are protected by all applicable intellectual
+property laws, including trade secret and copyright laws.
+Dissemination of this information or reproduction of this material
+is strictly forbidden unless prior written permission is obtained
+from Adobe.
+
 Script to generate optimization videos from primitive assembly pkl files.
 Loads the pkl file, extracts parameter sequences, and renders videos showing
 the optimization process with camera movement.
@@ -13,12 +28,12 @@ from superfit.utils.logger import logger
 def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="Generate optimization videos from primitive assembly pkl file")
-    parser.add_argument("--input_file", type=str, required=True, 
+    parser.add_argument("--input_path", type=str, required=True, 
                        help="Path to primitive_assembly.pkl file")
     parser.add_argument("--mode", type=str, default="all",
                        help="Mode: 'all' to render all iterations, or an integer for a specific iteration index")
     parser.add_argument("--save_dir", type=str, default=None,
-                       help="Directory to save videos. Defaults to the same directory as input_file")
+                       help="Directory to save videos. Defaults to the same directory as input_path")
     parser.add_argument("--save_name", type=str, default="opt_video",
                        help="Base name for saved video files (default: opt_video)")
     parser.add_argument("--no-save-seperately", dest="save_seperately", action="store_false", default=True,
@@ -27,8 +42,8 @@ def parse_args():
     args = parser.parse_args()
     
     # Validate pkl file exists
-    if not os.path.exists(args.input_file):
-        raise FileNotFoundError(f"File not found: {args.input_file}")
+    if not os.path.exists(args.input_path):
+        raise FileNotFoundError(f"File not found: {args.input_path}")
     
     # Validate mode
     if args.mode != "all":
@@ -42,7 +57,7 @@ def parse_args():
     
     # Set save_dir to input file directory if not specified
     if args.save_dir is None:
-        args.save_dir = os.path.dirname(os.path.abspath(args.input_file))
+        args.save_dir = os.path.dirname(os.path.abspath(args.input_path))
     
     # Create save_dir if it doesn't exist
     os.makedirs(args.save_dir, exist_ok=True)
@@ -52,8 +67,8 @@ def parse_args():
 
 def main(args: argparse.Namespace):
     """Main function to generate optimization videos."""
-    logger.info(f"Loading pkl file: {args.input_file}")
-    info_dict = cPickle.load(open(args.input_file, "rb"))
+    logger.info(f"Loading pkl file: {args.input_path}")
+    info_dict = cPickle.load(open(args.input_path, "rb"))
     
     # Validate n_iters exists
     n_iters = info_dict.get("n_iters", 0)

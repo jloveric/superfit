@@ -1,3 +1,19 @@
+"""
+ADOBE
+
+Copyright 2026 Adobe
+
+All Rights Reserved.
+
+NOTICE: All information contained herein is, and remains
+the property of Adobe and its suppliers, if any. The intellectual
+and technical concepts contained herein are proprietary to Adobe
+and its suppliers and are protected by all applicable intellectual
+property laws, including trade secret and copyright laws.
+Dissemination of this information or reproduction of this material
+is strictly forbidden unless prior written permission is obtained
+from Adobe.
+"""
 import torch as th
 import superfit.symbolic as sps
 import geolipi.symbolic as gls
@@ -198,7 +214,6 @@ def unpack_params_var_axis_sf(params):
     sf_params = unpack_params_sf(params[..., :8])
     logits = params[..., 8:11]
     return sf_params + (logits,)
-
 
 # Reinit helpers
 

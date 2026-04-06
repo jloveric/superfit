@@ -1,4 +1,19 @@
 """
+ADOBE
+
+Copyright 2026 Adobe
+
+All Rights Reserved.
+
+NOTICE: All information contained herein is, and remains
+the property of Adobe and its suppliers, if any. The intellectual
+and technical concepts contained herein are proprietary to Adobe
+and its suppliers and are protected by all applicable intellectual
+property laws, including trade secret and copyright laws.
+Dissemination of this information or reproduction of this material
+is strictly forbidden unless prior written permission is obtained
+from Adobe.
+
 Run texture fitting on all shapes under an input directory at once.
 
 Expects <input-dir>/<folder-name>/ with at least one .pkl file per folder
@@ -42,14 +57,14 @@ def get_best_pkl_in_folder(folder_path: str) -> Optional[str]:
     return None
 
 
-def _fit_texture_one(input_file: str, save_html: bool, save_edit_html: bool, ablation: int) -> None:
+def _fit_texture_one(input_path: str, save_html: bool, save_edit_html: bool, ablation: int) -> None:
     """Run texture optimization for a single pkl file (same logic as fit_texture.py)."""
     config_options.main_setting()
     config_options.set_config_ablation(ablation, fastmode=True)
     sketcher_3d = Sketcher(resolution=AlgConf.DATA_RESOLUTION, n_dims=3)
 
-    logger.info("Loading pkl file: %s", input_file)
-    info_dict = cPickle.load(open(input_file, "rb"))
+    logger.info("Loading pkl file: %s", input_path)
+    info_dict = cPickle.load(open(input_path, "rb"))
 
     n_iters = info_dict.get("n_iters", 0)
     if n_iters == 0:
@@ -95,8 +110,8 @@ def _fit_texture_one(input_file: str, save_html: bool, save_edit_html: bool, abl
     Stats.record("optimized_obj", optimized_obj_val)
     logger.info("Optimization complete. Final objective: %.6f", optimized_obj_val)
 
-    pkl_dir = os.path.dirname(input_file)
-    pkl_basename = os.path.basename(input_file)
+    pkl_dir = os.path.dirname(input_path)
+    pkl_basename = os.path.basename(input_path)
     output_basename = f"{pkl_basename}_textured.pkl"
     output_file = os.path.join(pkl_dir, output_basename)
 
@@ -120,10 +135,10 @@ def _fit_texture_one(input_file: str, save_html: bool, save_edit_html: bool, abl
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Fit texture on all shapes under input_dir (one subdir per shape, each with .pkl)"
+        description="Fit texture on all shapes under input_path (one subdir per shape, each with .pkl)"
     )
     parser.add_argument(
-        "--input_dir",
+        "--input_path",
         type=str,
         required=True,
         help="Base directory containing one subdir per shape, each with e.g. primitive_assembly.pkl",
@@ -149,20 +164,20 @@ def parse_args():
     )
     parser.add_argument("--ablation", type=int, default=0, help="Ablation number for config selection.")
     args = parser.parse_args()
-    if not os.path.isdir(args.input_dir):
-        raise FileNotFoundError(f"Input directory not found: {args.input_dir}")
+    if not os.path.isdir(args.input_path):
+        raise FileNotFoundError(f"Input directory not found: {args.input_path}")
     return args
 
 
 def main(args: argparse.Namespace) -> None:
-    input_dir = os.path.abspath(args.input_dir)
+    input_path = os.path.abspath(args.input_path)
     subdirs = sorted([
         d
-        for d in os.listdir(input_dir)
-        if os.path.isdir(os.path.join(input_dir, d)) and not d.startswith(".")
+        for d in os.listdir(input_path)
+        if os.path.isdir(os.path.join(input_path, d)) and not d.startswith(".")
     ])
     if not subdirs:
-        logger.warning("No subdirectories found under %s", input_dir)
+        logger.warning("No subdirectories found under %s", input_path)
         return
 
     if args.start_ind is not None or args.end_ind is not None:
@@ -173,7 +188,7 @@ def main(args: argparse.Namespace) -> None:
 
     failed = []
     for folder_name in subdirs:
-        folder_path = os.path.join(input_dir, folder_name)
+        folder_path = os.path.join(input_path, folder_name)
         pkl_path = get_best_pkl_in_folder(folder_path)
         if not pkl_path:
             logger.warning("Skipping %s: no .pkl found", folder_name)

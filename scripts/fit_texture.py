@@ -1,4 +1,19 @@
 """
+ADOBE
+
+Copyright 2026 Adobe
+
+All Rights Reserved.
+
+NOTICE: All information contained herein is, and remains
+the property of Adobe and its suppliers, if any. The intellectual
+and technical concepts contained herein are proprietary to Adobe
+and its suppliers and are protected by all applicable intellectual
+property laws, including trade secret and copyright laws.
+Dissemination of this information or reproduction of this material
+is strictly forbidden unless prior written permission is obtained
+from Adobe.
+
 Script to optimize material textures on primitives after geometric fitting is complete.
 """
 import os
@@ -17,19 +32,23 @@ from superfit.mat_opt.utils import save_html_mat_expr
 import superfit.utils.config as config_options
 from superfit.utils.config import AlgorithmConfig as AlgConf
 from superfit.utils.editing import save_edit_mode_html
+from superfit.algos.prune import sampling_based_pruning
+from superfit.utils.mesh_preprocess import cd_based_process_mesh_to_sdf
+from superfit.algos.eval_tools import MeasurePack
+from superfit.symbolic.utils import fetch_singular_expr_eval
 
 
 def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="Optimize material textures on primitives after fitting")
-    parser.add_argument("--input_file", type=str, required=True, help="Path to primitive_assembly.pkl file")
+    parser.add_argument("--input_path", type=str, required=True, help="Path to primitive_assembly.pkl file")
     parser.add_argument("--save_html", action="store_true", required=False, default=False)
     parser.add_argument("--save_edit_html", action="store_true", required=False, default=False)
     args = parser.parse_args()
     
     # Validate pkl file exists
-    if not os.path.exists(args.input_file):
-        raise FileNotFoundError(f"File not found: {args.input_file}")
+    if not os.path.exists(args.input_path):
+        raise FileNotFoundError(f"File not found: {args.input_path}")
     
     return args
 
@@ -43,11 +62,11 @@ def main(args: argparse.Namespace):
     sketcher_3d = Sketcher(resolution=AlgConf.DATA_RESOLUTION, n_dims=3)
     
     # Load the pkl file
-    if not os.path.exists(args.input_file):
-        raise FileNotFoundError(f"File not found: {args.input_file}")
+    if not os.path.exists(args.input_path):
+        raise FileNotFoundError(f"File not found: {args.input_path}")
     
-    logger.info(f"Loading pkl file: {args.input_file}")
-    info_dict = cPickle.load(open(args.input_file, "rb"))
+    logger.info(f"Loading pkl file: {args.input_path}")
+    info_dict = cPickle.load(open(args.input_path, "rb"))
     
     # Get input_mesh_file from info_dict
     n_iters = info_dict.get("n_iters", 0)
@@ -69,6 +88,22 @@ def main(args: argparse.Namespace):
     sample_mesh = sdf_to_mesh(output_sdf, sketcher_3d)
 
     # Material Expression:
+
+    input_mesh_file = info_dict['input_mesh_file']
+    target_mesh, target_sdf_prune, cd_avg = cd_based_process_mesh_to_sdf(input_mesh_file, sketcher_3d)
+    measure_pack = MeasurePack(
+        measure=AlgConf.PRUNE_METRIC,
+        target_mesh=target_mesh,
+        original_mesh=target_mesh,
+        target_sdf=target_sdf_prune,
+        len_weight=AlgConf.MPS_LEN_WEIGHT
+    )
+    base_geometric_expr, best_recon_measure, best_n_prim, best_obj = sampling_based_pruning(base_geometric_expr, sketcher_3d, measure_pack)
+
+    base_geometric_expr = fetch_singular_expr_eval(base_geometric_expr.tensor(), temperature=0.1, 
+                                                            relaxed_eval=False, remove_marker=False, 
+                                                            fix_axis_variant=True,
+                                                            use_euler_angle=False).sympy()
     material_expr = get_material_expr(base_geometric_expr)
 
     logger.info(f"Input mesh file: {input_mesh_file}")
@@ -108,8 +143,8 @@ def main(args: argparse.Namespace):
     logger.info(f"Optimization complete. Final objective: {optimized_obj_val:.6f}")
     
     # Save results
-    pkl_dir = os.path.dirname(args.input_file)
-    pkl_basename = os.path.basename(args.input_file)
+    pkl_dir = os.path.dirname(args.input_path)
+    pkl_basename = os.path.basename(args.input_path)
     
     output_basename = f"{pkl_basename}_textured.pkl"
     

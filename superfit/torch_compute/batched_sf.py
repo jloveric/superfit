@@ -1,3 +1,19 @@
+"""
+ADOBE
+
+Copyright 2026 Adobe
+
+All Rights Reserved.
+
+NOTICE: All information contained herein is, and remains
+the property of Adobe and its suppliers, if any. The intellectual
+and technical concepts contained herein are proprietary to Adobe
+and its suppliers and are protected by all applicable intellectual
+property laws, including trade secret and copyright laws.
+Dissemination of this information or reproduction of this material
+is strictly forbidden unless prior written permission is obtained
+from Adobe.
+"""
 import torch as th
 import torch.nn.functional as F
 from .primitives import map_arc_bulge
@@ -210,7 +226,7 @@ def batched_solid_sf_packed_eval(coords, params, temperature):
     scale = (w_cube + w_sphere + w_cylinder)
     bulge_ratio = 0 * bulge_ratio
     onion_ratio = (w_cube + w_cylinder + w_cone) * onion_ratio
-    new_params = th.cat([translate, rotate, size, roundness, dilate_3d, scale, bulge_ratio, onion_ratio], dim=-1)
+    new_params = th.cat([translate, size, roundness, dilate_3d, scale, bulge_ratio, onion_ratio, rotate], dim=-1)
 
     out_eval = batched_sf_packed_eval(coords, new_params)
     return out_eval

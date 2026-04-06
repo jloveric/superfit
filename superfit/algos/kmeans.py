@@ -1,3 +1,20 @@
+"""
+ADOBE
+
+Copyright 2026 Adobe
+
+All Rights Reserved.
+
+NOTICE: All information contained herein is, and remains
+the property of Adobe and its suppliers, if any. The intellectual
+and technical concepts contained herein are proprietary to Adobe
+and its suppliers and are protected by all applicable intellectual
+property laws, including trade secret and copyright laws.
+Dissemination of this information or reproduction of this material
+is strictly forbidden unless prior written permission is obtained
+from Adobe.
+"""
+# Used for eval.
 import torch
 import numpy as np
 import numpy as np
@@ -5,7 +22,6 @@ import torch
 import trimesh
 import torch.nn.functional as F
 import numpy as np
-import faiss
 
 
 def fast_kmeans(features, K=20, use_pca=False, d_reduced=64, use_cosine=True):
@@ -20,6 +36,7 @@ def fast_kmeans(features, K=20, use_pca=False, d_reduced=64, use_cosine=True):
         labels: (N,) int
         centroids: (K, dim)
     """
+    import faiss
 
     feats = features.detach().float()
     N, D = feats.shape

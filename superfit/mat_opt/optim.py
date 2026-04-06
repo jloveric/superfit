@@ -1,4 +1,19 @@
+"""
+ADOBE
 
+Copyright 2026 Adobe
+
+All Rights Reserved.
+
+NOTICE: All information contained herein is, and remains
+the property of Adobe and its suppliers, if any. The intellectual
+and technical concepts contained herein are proprietary to Adobe
+and its suppliers and are protected by all applicable intellectual
+property laws, including trade secret and copyright laws.
+Dissemination of this information or reproduction of this material
+is strictly forbidden unless prior written permission is obtained
+from Adobe.
+"""
 import torch as th
 import sysl.symbolic as sls
 import geolipi.symbolic as gls
@@ -14,6 +29,7 @@ from superfit.utils.logger import logger
 from superfit.utils.stats import Stats
 from superfit.optim.primitive_registry import HANDLER_REGISTRY
 import superfit.symbolic as sps
+from ..symbolic.utils import INVERSE_PRIM_MAP
 
 N_POINTS = 100_000
 LAPLACIAN_LOSS_WEIGHT = 1e-5
@@ -23,7 +39,7 @@ LOSS_IMPROVEMENT_THRESHOLD = 0.005
 def optimize_color(target_mesh, sample_mesh, new_expr, sketcher, verbose=True):
 
     # 2. Convert the geom expression into an optimizable form. 
-    version = getattr(sps, AlgConf.PRIM_TYPE)
+    version = getattr(sps, INVERSE_PRIM_MAP[AlgConf.PRIM_TYPE])
     handler = HANDLER_REGISTRY[version]
     assert handler is not None, f"No handler found for {new_expr.base_class}"
 

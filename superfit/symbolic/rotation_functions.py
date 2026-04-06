@@ -1,7 +1,25 @@
+"""
+ADOBE
+
+Copyright 2026 Adobe
+
+All Rights Reserved.
+
+NOTICE: All information contained herein is, and remains
+the property of Adobe and its suppliers, if any. The intellectual
+and technical concepts contained herein are proprietary to Adobe
+and its suppliers and are protected by all applicable intellectual
+property laws, including trade secret and copyright laws.
+Dissemination of this information or reproduction of this material
+is strictly forbidden unless prior written permission is obtained
+from Adobe.
+"""
 import torch as th
 import geolipi.symbolic as gls
 from geolipi.torch_compute.transforms import axis_angle_to_rotation_matrix
 
+EPS_ROT = 1e-9
+## MOVE THIS TO GEOLIPI
 
 def convert_axis_angle_to_euler(axis_angle: th.Tensor) -> th.Tensor:
     """
@@ -231,3 +249,163 @@ def recursive_euler_angle_to_axisangle(gls_expr):
 def recursive_eulerangle_to_axisangle(gls_expr):
     return recursive_euler_angle_to_axisangle(gls_expr)
 
+
+def _rotation_matrix_to_axis_angle_batched(R: th.Tensor, eps: float = 1e-6) -> th.Tensor:
+    """
+    Batched rotation matrix -> axis-angle vector conversion.
+
+    Args:
+        R: Tensor of shape (B, 3, 3)
+        eps: Small numerical threshold
+
+    Returns:
+        Tensor of shape (B, 3), where each row is an axis-angle vector.
+
+    Notes:
+        - Handles the theta ~ 0 case by returning [eps, 0, 0]
+        - Handles the theta ~ pi case with the diagonal-based fallback
+        - Assumes valid rotation matrices
+    """
+    if R.ndim != 3 or R.shape[1:] != (3, 3):
+        raise ValueError(f"Expected R to have shape (B, 3, 3), got {tuple(R.shape)}")
+
+    device, dtype = R.device, R.dtype
+    B = R.shape[0]
+
+    trace = R[:, 0, 0] + R[:, 1, 1] + R[:, 2, 2]
+    cos_theta = th.clamp((trace - 1.0) / 2.0, -1.0, 1.0)
+    theta = th.acos(cos_theta)  # (B,)
+
+    out = th.zeros(B, 3, device=device, dtype=dtype)
+
+    is_zero = th.isclose(theta, th.zeros_like(theta), atol=eps)
+    is_pi = th.isclose(theta, th.full_like(theta, th.pi), atol=eps)
+    is_regular = ~(is_zero | is_pi)
+
+    # Case 1: theta ~= 0
+    if is_zero.any():
+        out[is_zero] = th.tensor([eps, 0.0, 0.0], device=device, dtype=dtype)
+
+    # Case 2: regular case
+    if is_regular.any():
+        R_reg = R[is_regular]
+        theta_reg = theta[is_regular]
+
+        sin_theta = th.sin(theta_reg).clamp_min(eps)
+        skew = (R_reg - R_reg.transpose(-1, -2)) / (2.0 * sin_theta[:, None, None])
+
+        axis = th.stack(
+            [
+                skew[:, 2, 1],
+                skew[:, 0, 2],
+                skew[:, 1, 0],
+            ],
+            dim=-1,
+        )  # (N, 3)
+
+        out[is_regular] = theta_reg[:, None] * axis
+
+    # Case 3: theta ~= pi
+    if is_pi.any():
+        R_pi = R[is_pi]
+        N = R_pi.shape[0]
+
+        eye = th.eye(3, device=device, dtype=dtype).expand(N, 3, 3)
+        R_plus = (R_pi + eye) / 2.0
+
+        axis = th.sqrt(th.clamp(th.diagonal(R_plus, dim1=-2, dim2=-1), min=0.0))  # (N, 3)
+        norms = th.linalg.norm(axis, dim=-1, keepdim=True)
+
+        fallback = th.tensor([1.0, 0.0, 0.0], device=device, dtype=dtype).expand(N, 3)
+        axis = th.where(norms < eps, fallback, axis)
+        axis = axis / th.linalg.norm(axis, dim=-1, keepdim=True).clamp_min(eps)
+
+        out[is_pi] = theta[is_pi][:, None] * axis
+
+    return out
+
+    import torch as th
+
+def rotation_matrix_to_axis_angle_batched(R: th.Tensor, eps: float = EPS_ROT) -> th.Tensor:
+    if R.ndim != 3 or R.shape[1:] != (3, 3):
+        raise ValueError(f"Expected R to have shape (B, 3, 3), got {tuple(R.shape)}")
+
+    device, dtype = R.device, R.dtype
+    B = R.shape[0]
+
+    trace = R[:, 0, 0] + R[:, 1, 1] + R[:, 2, 2]
+    cos_theta = th.clamp((trace - 1.0) / 2.0, -1.0, 1.0)
+    theta = th.acos(cos_theta)
+
+    out = th.zeros(B, 3, device=device, dtype=dtype)
+
+    is_zero = theta.abs() < eps
+    is_pi = (theta - th.pi).abs() < 1e-4
+    is_regular = ~(is_zero | is_pi)
+
+    # theta ~ 0
+    if is_zero.any():
+        out[is_zero] = 0.0
+
+    # regular case
+    if is_regular.any():
+        R_reg = R[is_regular]
+        theta_reg = theta[is_regular]
+
+        sin_theta = th.sin(theta_reg)
+        axis = th.stack(
+            [
+                R_reg[:, 2, 1] - R_reg[:, 1, 2],
+                R_reg[:, 0, 2] - R_reg[:, 2, 0],
+                R_reg[:, 1, 0] - R_reg[:, 0, 1],
+            ],
+            dim=-1,
+        ) / (2.0 * sin_theta[:, None].clamp_min(eps))
+
+        axis = axis / axis.norm(dim=-1, keepdim=True).clamp_min(eps)
+        out[is_regular] = theta_reg[:, None] * axis
+
+    # theta ~ pi
+    if is_pi.any():
+        R_pi = R[is_pi]
+        theta_pi = theta[is_pi]
+        N = R_pi.shape[0]
+
+        axis = th.zeros(N, 3, device=device, dtype=dtype)
+
+        xx = (R_pi[:, 0, 0] + 1.0) / 2.0
+        yy = (R_pi[:, 1, 1] + 1.0) / 2.0
+        zz = (R_pi[:, 2, 2] + 1.0) / 2.0
+
+        xy = (R_pi[:, 0, 1] + R_pi[:, 1, 0]) / 4.0
+        xz = (R_pi[:, 0, 2] + R_pi[:, 2, 0]) / 4.0
+        yz = (R_pi[:, 1, 2] + R_pi[:, 2, 1]) / 4.0
+
+        diag = th.stack([xx, yy, zz], dim=-1)
+        idx = diag.argmax(dim=-1)
+
+        mask0 = idx == 0
+        if mask0.any():
+            x = th.sqrt(xx[mask0].clamp_min(0.0))
+            y = xy[mask0] / x.clamp_min(eps)
+            z = xz[mask0] / x.clamp_min(eps)
+            axis[mask0] = th.stack([x, y, z], dim=-1)
+
+        mask1 = idx == 1
+        if mask1.any():
+            y = th.sqrt(yy[mask1].clamp_min(0.0))
+            x = xy[mask1] / y.clamp_min(eps)
+            z = yz[mask1] / y.clamp_min(eps)
+            axis[mask1] = th.stack([x, y, z], dim=-1)
+
+        mask2 = idx == 2
+        if mask2.any():
+            z = th.sqrt(zz[mask2].clamp_min(0.0))
+            x = xz[mask2] / z.clamp_min(eps)
+            y = yz[mask2] / z.clamp_min(eps)
+            axis[mask2] = th.stack([x, y, z], dim=-1)
+
+        axis = axis / axis.norm(dim=-1, keepdim=True).clamp_min(eps)
+        out[is_pi] = theta_pi[:, None] * axis
+
+    return out

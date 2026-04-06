@@ -1,51 +1,50 @@
 # Dataset & Evaluation Setup
 
-## 1. Install Toys4k
+## 1. Download Datasets
 
 Download the [Toys4k](https://github.com/rehg-lab/lowshot-shapebias/tree/main/toys4k) dataset (Stojanov et al., CVPR 2021).
-It contains 4,179 toy-object meshes across 105 categories.
+It contains 4,000 toy-object meshes across 105 categories.
 Once downloaded, set `TOY4K_PATH_PREFIX` in `superfit/utils/constants.py` to point to the root directory (the folder containing the per-category subdirectories, e.g., `truck/`, `chair/`, etc.).
+
+Download the [PartObjaverse-Tiny](https://github.com/Pointcept/SAMPart3D/blob/main/PartObjaverse-Tiny/PartObjaverse-Tiny.md) dataset by following instructions on [this page](https://github.com/Pointcept/SAMPart3D/blob/main/PartObjaverse-Tiny/PartObjaverse-Tiny.md). Set `PARTOBJAVERSE_BASE`, `PARTOBJAVERSE_MESH_DIR`, `PARTOBJAVERSE_INSTANCE_DIR` in `superfit/utils/constants.py` accordingly.
 
 ## 2. Evaluation split
 
-We release `dataset/test_set_1.csv` with the repository.
+We release `dataset/new_testset.csv` with the repository.
 This file lists shapes from Toys4k ordered by **farthest-point sampling (FPS)** using **Chamfer Distance (CD)** between shapes, seeded from a randomly chosen starting shape. The first *N* entries (e.g., the first 500) therefore form a maximally diverse evaluation subset.
-
-Format: `category,<absolute_path_to_mesh>` — update the path prefix to match your local Toys4k install before use, or rely on the relative-path version referenced by `TOY4K_CSV_FILE` in `constants.py`.
 
 ## 3. Qualitative split
 
-We also release `dataset/qual_testset.csv`, a small hand-selected set of shapes chosen for visual quality and diversity.
-These are useful for generating figures and qualitative comparisons.
+We also release `dataset/qual_testset.csv`, a small hand-selected set of shapes chosen for visual quality and diversity. Additionally, `dataset/select_superfrustum_toys4k.csv` and `dataset/select_superfrustum_partobjaverse.csv` contain some hand-selected samples where the inferred assemblies appear to have good quality. 
 
 ## 4. Released primitive assemblies
 
-We release pre-computed primitive-assembly results so that users can inspect outputs, run evaluation, or render visualizations without re-fitting.
+We release pre-computed primitive-assembly results so that users can inspect outputs, run evaluation, or render visualizations without re-fitting. Please download them from huggingface [here]().
 
-### Primitive-type comparison (test set)
+1. SuperFrustum fitting for toys4k. 
 
-Fitting results on the evaluation split using each supported primitive type under matched settings:
+| ablation | iou | bidir_iou | cd | n_prims | overlap | unoverlap | total_time | n_iters |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Toys4k | 0.8967 | 0.8494 | 0.1931 | 15.7253 | 0.2560 | 0.0392 | 802.4408 | 4.4640 |
 
-| Primitive | Ablation | Type key |
-|-----------|----------|----------|
-| Cuboid | 34 | `Cuboid` |
-| SuperQuadric (SQ) | 35 | `VarAxisSQ` |
-| SPProto (SPP) | 32 | `VarAxisSPP` |
-| SuperFrustum (SF) | 31 | `VarAxisSF` |
-| SuperGeon (SG) | 33 | `VarAxisSG` |
-| SF — paper setting | 0 (default) | `VarAxisSF` + post-prune + bidir |
 
-### Full-dataset runs
+2. Toys4k 500 subset fitting with different primitives. Check `primitives.md` for their evaluation.
 
-| Run | Dataset | Description |
-|-----|---------|-------------|
-| SQ on all Toys4k | Toys4k (4k shapes) | SuperQuadric fitting across the entire dataset. |
-| Non-smooth SF on all Toys4k | Toys4k (4k shapes) | SuperFrustum fitting without the smoothing step. |
+Root: `/users/aganesh8/data/aganesh8/data/project_neo/sf_release/toys4k`
 
-### Cross-dataset chair fitting
+| Type | Folder |
+|------|--------|
+| Cuboid | `cuboid/` |
+| SuperQuadric (SQ) | `superquadric/` |
+| SPProto (SPP) | `sp_proto/` |
+| SuperFrustum (SF) | `superfrustum/` |
+| SuperGeon (SG) | `supergeon/` |
+| SF — paper (CVPR) | `sf_cvpr/` |
 
-SuperFrustum (SF) fitting on **chair** meshes drawn from three sources:
 
-- **Toys4k** — chair category
-- **3DCoMPaT++** — chair category ([Li et al., 2024](https://3dcompat-dataset.org/v2/))
-- **PartNet** — chair category ([Mo et al., CVPR 2019](https://partnet.cs.stanford.edu/))
+3. PartObjaverse fitting with superfrustum along with texture fitting. 
+
+| ablation | iou | bidir_iou | cd | n_prims | overlap | unoverlap | total_time | n_iters |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| PartObjaverse | 0.8983 | 0.8183 | 0.1345 | 25.1050 | 0.2530 | 0.0343 | 1270.9879 | 5.9750 |
+

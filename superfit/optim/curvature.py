@@ -1,4 +1,19 @@
 """
+ADOBE
+
+Copyright 2026 Adobe
+
+All Rights Reserved.
+
+NOTICE: All information contained herein is, and remains
+the property of Adobe and its suppliers, if any. The intellectual
+and technical concepts contained herein are proprietary to Adobe
+and its suppliers and are protected by all applicable intellectual
+property laws, including trade secret and copyright laws.
+Dissemination of this information or reproduction of this material
+is strictly forbidden unless prior written permission is obtained
+from Adobe.
+
 This file contains the code for computing the curvature weights for the points on the mesh using IGL.
 Ideally use: https://www.cs.umd.edu/~varshney/papers/mesh_saliency_sig05.pdf
 to compute the curvature weights for the points on the mesh.

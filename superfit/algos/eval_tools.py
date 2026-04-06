@@ -1,6 +1,21 @@
+"""
+ADOBE
+
+Copyright 2026 Adobe
+
+All Rights Reserved.
+
+NOTICE: All information contained herein is, and remains
+the property of Adobe and its suppliers, if any. The intellectual
+and technical concepts contained herein are proprietary to Adobe
+and its suppliers and are protected by all applicable intellectual
+property laws, including trade secret and copyright laws.
+Dissemination of this information or reproduction of this material
+is strictly forbidden unless prior written permission is obtained
+from Adobe.
+"""
 import os
 import re
-import ot  # POT
 import cubvh
 import trimesh
 import torch as th
@@ -698,6 +713,7 @@ def earth_mover_distance_exact(pc1: th.Tensor, pc2: th.Tensor) -> th.Tensor:
 
 @th.no_grad()
 def emd_exact_pot(pc1, pc2):
+    import ot  # POT
     # pc1/pc2: (N,3) CUDA tensors
     N = pc1.shape[0]
 
@@ -717,6 +733,7 @@ def emd_exact_pot(pc1, pc2):
     return th.tensor(emd, device=pc1.device, dtype=th.float32)
 
 def emd_sinkhorn(pc1, pc2, eps=0.01):
+    import ot
     N = pc1.shape[0]
     M = th.cdist(pc1, pc2)
     a = th.ones(N, device=pc1.device) / N

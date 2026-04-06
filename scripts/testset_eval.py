@@ -1,4 +1,19 @@
 """
+ADOBE
+
+Copyright 2026 Adobe
+
+All Rights Reserved.
+
+NOTICE: All information contained herein is, and remains
+the property of Adobe and its suppliers, if any. The intellectual
+and technical concepts contained herein are proprietary to Adobe
+and its suppliers and are protected by all applicable intellectual
+property laws, including trade secret and copyright laws.
+Dissemination of this information or reproduction of this material
+is strictly forbidden unless prior written permission is obtained
+from Adobe.
+
 Evaluate primitive assemblies under an input directory.
 
 For each folder: load best program from pkl, run sampling_based_pruning to pick the best
@@ -107,29 +122,29 @@ def eval_one_folder(pkl_path: str, eval_last_only: bool, save_per_instance: bool
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Evaluate primitive assemblies under input_dir")
-    p.add_argument("--input_dir", type=str, required=True, help="Root with one subdir per shape (each has .pkl)")
+    p = argparse.ArgumentParser(description="Evaluate primitive assemblies under input_path")
+    p.add_argument("--input_path", type=str, required=True, help="Root with one subdir per shape (each has .pkl)")
     p.add_argument("--eval", type=str, default="last", choices=["last", "all_iters"], help="Eval last iter or all iters")
     p.add_argument("--save_per_instance_metrics", action="store_true", help="Save *_eval.pkl inside each folder")
     p.add_argument("--start_ind", type=int, default=None, help="Start index (inclusive) for subdirs")
     p.add_argument("--end_ind", type=int, default=None, help="End index (exclusive) for subdirs")
     p.add_argument("--include_semantic", action="store_true", help="Include semantics in the evaluation")
     args = p.parse_args()
-    if not os.path.isdir(args.input_dir):
-        raise FileNotFoundError(f"Not a directory: {args.input_dir}")
+    if not os.path.isdir(args.input_path):
+        raise FileNotFoundError(f"Not a directory: {args.input_path}")
     return args
 
 
 def main():
     args = parse_args()
-    input_dir = os.path.abspath(args.input_dir)
+    input_path = os.path.abspath(args.input_path)
 
     subdirs = sorted(
-        d for d in os.listdir(input_dir)
-        if os.path.isdir(os.path.join(input_dir, d)) and not d.startswith(".")
+        d for d in os.listdir(input_path)
+        if os.path.isdir(os.path.join(input_path, d)) and not d.startswith(".")
     )
     if not subdirs:
-        logger.warning("No subdirs in %s", input_dir)
+        logger.warning("No subdirs in %s", input_path)
         return
 
     start = args.start_ind if args.start_ind is not None else 0
@@ -145,7 +160,7 @@ def main():
     all_metrics = []
     failed = []
     for name in subdirs:
-        folder = os.path.join(input_dir, name)
+        folder = os.path.join(input_path, name)
         pkl_path = get_best_pkl_in_folder(folder)
         if not pkl_path:
             logger.warning("Skipping %s: no pkl", name)
@@ -178,7 +193,7 @@ def main():
 
     summary = {"means": means, "record": record}
     out_name = f"eval_summary_start{start}_end{end}.pkl"
-    out_path = os.path.join(input_dir, out_name)
+    out_path = os.path.join(input_path, out_name)
     cPickle.dump(summary, open(out_path, "wb"))
     logger.info("Saved %s", out_path)
 
@@ -188,7 +203,7 @@ def main():
         print(f"| {k} | {means[k]:.6f} |")
     print()
 
-    md_path = os.path.join(input_dir, out_name.replace(".pkl", ".md"))
+    md_path = os.path.join(input_path, out_name.replace(".pkl", ".md"))
     with open(md_path, "w") as f:
         f.write("| Metric | Mean |\n|--------|------|\n")
         for k in sorted(means.keys()):

@@ -1,45 +1,19 @@
-# SuperFit
+# SuperFit: Residual Primitive Fitting with SuperFrusta
 
-Paper / project links.
-Banner img.
-# TODO: 
-1. Release Models: 
-  a. Toy4k 6 versions (Cuboid/SQ/SPP/SF/SG/Orig/orig_mesh)
-  b. SF -> Toy4k Qual (or all?).
-  c. SF -> PartObjaverse (with textures).
-  d. ChairAssembly6k | No Smooth
+<p align="center">
+  <img src="assets/banner.jpeg" alt="Banner" />
+</p>
 
-2. Test and make sure things are working. Particularly around the following: 
-First create an ablation which has just 10 iterations of optimization for fast checking. 
+## What is it?
 
-a. Using different prune metrics. 
-b. decompose mode (MSD / COACD / VHACD) 
-c. Optimizer Adamw. 
-d. LOWER_SP-True / False/ 
-e. DO_Prune True / False.
-f. Primtype -> cuboid / sq / varaxis sq/ sf/ varaxis sf / sg / varaxis sg/ solidsf / spp / varaxisspp.
-e. Smoothen is off. 
-g. TARGET_MODE bboxed vs dilated
-h. SAVE_JIT_CACHE False / True. 
-i. TorchCompile True False. 
-j. USE_CURVATURE_WEIGHTS 
-h. Stochastic dropout testing
-i. Morph loss, Tversky loss.
-
-3. Readme Cleaning. 
-   => What this is / overview / banner / Link to paper / project page. License (ADOBE LICENSE)
-   => Instructions for running mesh-to-pa / texturing / editing / opt videos. Help ablation - fit cuboids /varaxissq / varaxissf/ varaxissg. Mesh-to 
-   => Eval results replication. 
-   => EVAL data link -> datasets.md. 
-   => Primitives discussion -> link to primitives. 
-   => Acknowledgements (Adobe team) Inigo / Anton Mikalove / Paniq / 
+SuperFit fits compact assemblies of **SuperFrusta** and other primitives to 3D shapes. **[Project page](https://bardofcodes.github.io/superfit)** · **[arXiv](https://arxiv.org/abs/2512.09201)**. Built on top of **[SySL](https://github.com/BardOfCodes/sysl)**. See **[Install](#install-instructions)** below and **[BibTeX](#bibtex)**.
 
 ## Install Instructions
 
 Clone and create the conda environment:
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/BardOfCodes/superfit.git
 cd superfit
 conda env create -f env.yml
 conda activate superfit
@@ -59,104 +33,85 @@ All dataset and artifact locations are derived from these. See [notes/dataset.md
 
 ### Additional Dependencies
 
-The following packages are not on PyPI and must be installed separately per their own instructions:
+The following packages will need to be manually installed according to pytorch and cuda version. Please follow the instructions given in the respective repositories:
 
-- [geolipi](https://github.com/bardofcodes/geolipi)
-- [sysl](https://github.com/bardofcodes/sysl)
 - [cubvh](https://github.com/ashawkey/cubvh)
 - [kaolin](https://github.com/NVIDIAGameWorks/kaolin) (optional, for some notebooks)
 
-## What You Can Do With It
+## What can you do with it?
 
-### Fit a single mesh to a primitive assembly
-
-```bash
-python scripts/mesh_to_pa.py \
-  --input_file path/to/mesh.obj \
-  --save_dir path/to/output \
-  --fastmode --ablation 0
-```
-
-Add `--save_html` or `--save_edit_html` to export interactive viewer files alongside the `.pkl` output.
-
-### Fit primitives over a dataset split
+### 1. Convert (watertight) meshes into Primitive Assemblies
 
 ```bash
-python scripts/testset_fit_primitives.py \
-  --dataset toys4k \
-  --start_ind 0 --end_ind 100 \
-  --ablation 0 --fastmode
+python scripts/mesh_to_assembly.py --input_path <path> --save_dir <save-dir> --fastmode --save_html --save_edit_html --save_mesh
 ```
 
-For PartObjaverse part-wise fitting:
+This will convert an input image into a compact assembly of SuperFrusta. Use different `--ablation` options to generate assemblies of cuboids/superquadrics/supergeons etc. Note that `--fastmode` saves torch compile artifacts at `AOT_ARTIFACT_DIR` as specified in `superfit/utils/constants.py`.
+
+<p align="center">
+  <img src="assets/mesh_to_assembly.jpg" alt="Mesh to primitive assembly" />
+</p>
+
+If the input mesh contains textures, you can run `fit_textures.py` to add textures to the primitive assembly. This will add 2D spherical textures to each primitive. We also have the `testset_fit_textures.py` for running this process across multiple inputs. 
 
 ```bash
-python scripts/testset_fit_partwise.py \
-  --start_ind 0 --end_ind 50 \
-  --ablation 0 --fastmode
+python scripts/fit_texture.py --input_path <path-to-assembly-pkl> --save_html --save_edit_html
 ```
 
-### Fit textures on existing outputs
+<p align="center">
+  <img src="assets/textured.jpeg" alt="Texture fitting" />
+</p>
+
+
+Finally, you can also generate videos of the optimization process: 
 
 ```bash
-python scripts/testset_fit_textures.py \
-  --input_dir path/to/outputs/toys4k/ablation_0_v6 \
-  --ablation 0 --save_html
+python scripts/generate_opt_video.py --input_path <path-to-assembly-pkl> --save_dir <save-dir> 
 ```
 
-### Generate optimization videos
+<p align="center">
+  <img src="assets/optimization_video.png" alt="Optimization video" />
+</p>
+
+
+Note that we don't generate html shaders for SuperQuadric since we don't have analytical sphere-tracable SDF functions for them. Additionally, please change the configuration in `superfit/utils/config.py` if needed.
+
+### 2. Evaluation on TestSet
+
+1. Fit primitives to toys5k
 
 ```bash
-python scripts/testset_opt_video.py \
-  --input_dir path/to/outputs/toys4k/ablation_0_v6 \
-  --ablation 0
+python scripts/testset_fit_primitives.py --start_ind 0 --end_ind 500 --fastmode --save_dir <save-path>
 ```
 
-To render specific shapes only: `--folders truck_028 apple_003`.
+This will generate primitive assemblies for our Toy4k evaluation subset. You can use additionally use `--dataset partobjaverse` to generate the fits for PartObjaverse dataset. Finally, [`job_scripts/all_toy4k.sh`](job_scripts/all_toy4k.sh) shows how to run the process in parallel across gpus if need be.
 
-## Eval
+2. Run Evaluation
 
-### Matching paper settings
-
-The paper results use `ablation 0` with `--fastmode` on the Toys4k test split. Config presets are applied through `set_config_ablation()` in `superfit/utils/config.py`.
-
-### Running evaluation on fitted outputs
+Once the primitives are generated, you can run: 
 
 ```bash
-python scripts/testset_eval.py \
-  --input_dir path/to/outputs/toys4k/ablation_0_v6 \
-  --eval last
+python scripts/testset_eval.py --input_path <save-path> --save_per_instance_metrics --start_ind 0 --end_ind 500 --include_semantic
 ```
 
-This produces a summary `.pkl` and a markdown table in the input directory. Add `--save_per_instance_metrics` for per-shape eval files. Add `--include_semantic` if semantic annotations are available.
+For the semantic metrics, we require [faiss](https://github.com/facebookresearch/faiss) as well as [PartField](https://github.com/nv-tlabs/PartField). Add `--include_semantic` to evaluate the semantic metrics.
 
-### Multi-GPU batch runs
+### 3. Explore Fitting Results & Generate Detailed Meshes
 
-Use the job script to distribute fitting across GPUs:
+We also provide a complimentary web app to explore the primitive assemblies - the fitting process, the metrics, the generated shapes etc. 
 
-```bash
-bash job_scripts/all_toy4k.sh 0 500 4 0 aott
-# args: start_ind end_ind num_gpus [ablation] [aot_postfix]
-```
 
-Edit `LOG_DIR`, `SCRIPT_DIR`, and conda env name at the top of the script for your cluster.
+The inferred primitive assembly can also be used as spatial guidance to generate higher fidelity meshes by combining our method with [SpaceControl](https://spacecontrol3d.github.io), by E. Fedele et al.
 
-## Other Resources
 
-1. [Primitive notes](notes/primitives.md) -- supported primitive types and their capabilities.
-2. [Dataset notes](notes/dataset.md) -- data layout, split format, and PartObjaverse usage.
-3. Exploratory notebooks in `notebooks/` covering primitives, pruning, timing, mesh curvature, semantic loss, texture, and paper figure generation.
-4. Space Control based editing -- see the [SpaceControl repo](https://github.com/bardofcodes/spacecontrol).
+Find instructions to install and run this at [superfit_app](https://github.com/BardOfCodes/superfit_app).
 
-## Updated Version
+## Additional Details
 
-Improvements over the initial release:
+Details regarding the dataset are provided in [notes/dataset.md](notes/dataset.md). For details regarding the primitives check out [notes/primitives.md](notes/primitives.md). We also made quite a few improvements over the results after our CVPR submission. These are listed in [notes/post_submission.md](notes/post_submission.md).
 
-1. VarAxis primitives (`VarAxisSF`, `VarAxisSG`, `VarAxisSPP`, `VarAxisSQ`)
-2. Bi-directional sampling
-3. SDF-on-points loss
-4. Curvature-aware relaxation and smoothening
-5. Semantic / macro loss support
+The [`notebooks/`](notebooks/) folder contains a few iPython Notebooks which demo different aspects of our method such as (a) primitive design exploration in [notebooks/primitive_design.ipynb](notebooks/primitive_design.ipynb), (b) curvature exploration in [notebooks/curvature.ipynb](notebooks/curvature.ipynb), (c) morphological decomposition in [notebooks/msd.ipynb](notebooks/msd.ipynb), and (d) evaluation statistics in [notebooks/eval_stats.ipynb](notebooks/eval_stats.ipynb). 
+
 
 ## BibTeX
 
@@ -175,4 +130,4 @@ Improvements over the initial release:
 This work was done during an internship at Adobe Research.
 Thanks to all co-authors -- [Matheus Gadelha](https://mgadelha.me/), [Thibault Groueix](https://www.tgroueix.com/), [Zhiqin Chen](https://czq142857.github.io/), [Siddhartha Chaudhuri](https://www.cse.iitb.ac.in/~sidch/), [Vladimir G. Kim](http://www.vovakim.com/), [Wang Yifan](https://yifita.github.io/), and [Daniel Ritchie](https://dritchie.github.io/) -- and to Inigo Quilez, Anton Mikhailov, Luc Chamerlat at Adobe, and the ShaderToy community, particularly Paniq, for foundational primitive functions.
 
-For questions reach out at adityaganeshan@gmail.com.
+For questions reach out at `adityaganeshan@gmail.com`.

@@ -1,3 +1,19 @@
+"""
+ADOBE
+
+Copyright 2026 Adobe
+
+All Rights Reserved.
+
+NOTICE: All information contained herein is, and remains
+the property of Adobe and its suppliers, if any. The intellectual
+and technical concepts contained herein are proprietary to Adobe
+and its suppliers and are protected by all applicable intellectual
+property laws, including trade secret and copyright laws.
+Dissemination of this information or reproduction of this material
+is strictly forbidden unless prior written permission is obtained
+from Adobe.
+"""
 import json
 import numpy as np
 import distinctipy
@@ -12,8 +28,9 @@ from ..symbolic.utils import (
     extract_primitive_bundles,
     n_prims_in_expr,
     recursive_prim_to_packed,
-    recursive_axisangle_to_eulerangle,
 )
+from ..symbolic.rotation_functions import recursive_axisangle_to_eulerangle
+
 from sysl.shader_runtime import create_multibuffer_shader_html
 from sysl.utils import recursive_sm_to_smg, recursive_gls_to_sysl
 from ..symbolic.utils import fetch_singular_expr_eval

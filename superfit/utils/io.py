@@ -1,3 +1,19 @@
+"""
+ADOBE
+
+Copyright 2026 Adobe
+
+All Rights Reserved.
+
+NOTICE: All information contained herein is, and remains
+the property of Adobe and its suppliers, if any. The intellectual
+and technical concepts contained herein are proprietary to Adobe
+and its suppliers and are protected by all applicable intellectual
+property laws, including trade secret and copyright laws.
+Dissemination of this information or reproduction of this material
+is strictly forbidden unless prior written permission is obtained
+from Adobe.
+"""
 import torch as th
 import os
 import csv
@@ -157,6 +173,7 @@ def to_cpu_recursive(x, *, clone: bool = False, detach: bool = False, _memo=None
 def get_best_expr(info_dict, iter_idx=None, prog_type = "best_program"):
     if iter_idx is None:
         iter_idx = info_dict.get("n_iters", 0) - 1
+        iter_idx = max(iter_idx, 0)
     iter_key = f"iter_{iter_idx}.{prog_type}"
     if iter_key not in info_dict:
         iter_key = f"iter_{iter_idx}.pruned_program"

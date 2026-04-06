@@ -1,3 +1,19 @@
+"""
+ADOBE
+
+Copyright 2026 Adobe
+
+All Rights Reserved.
+
+NOTICE: All information contained herein is, and remains
+the property of Adobe and its suppliers, if any. The intellectual
+and technical concepts contained herein are proprietary to Adobe
+and its suppliers and are protected by all applicable intellectual
+property laws, including trade secret and copyright laws.
+Dissemination of this information or reproduction of this material
+is strictly forbidden unless prior written permission is obtained
+from Adobe.
+"""
 import os
 import argparse
 import torch as th
@@ -23,7 +39,7 @@ th.set_float32_matmul_precision("medium")
 
 def main_shape_wise(args):
         
-    input_file = args.input_file
+    input_path = args.input_path
     save_dir = args.save_dir
     
     if not os.path.exists(save_dir):
@@ -47,7 +63,7 @@ def main_shape_wise(args):
     save_file_temp = os.path.join(save_dir, f"stepwise.pkl")
 
     sketcher_3d = Sketcher(resolution=AlgConf.DATA_RESOLUTION, n_dims=3)
-    mesh, target_sdf = cd_based_process_mesh_to_sdf(input_file, sketcher_3d)
+    mesh, target_sdf, _ = cd_based_process_mesh_to_sdf(input_path, sketcher_3d)
 
     if not mesh.is_watertight:
         raise ValueError(f"------- Non Watertight Mesh -------")
@@ -59,7 +75,7 @@ def main_shape_wise(args):
         # continue
         
     Stats.reset()
-    Stats.record("input_file", input_file)
+    Stats.record("input_path", input_path)
     with Stats.timer("resfit_total"):
         best_program, running_program = resfit(mesh, save_file=save_file_temp)
     cPickle.dump(to_cpu_recursive(Stats.get_dict()), open(save_file, "wb"))
@@ -75,14 +91,18 @@ def main_shape_wise(args):
         len_weight=AlgConf.MPS_LEN_WEIGHT
     )
     singular_best_program,_, _, _ = sampling_based_pruning(best_program, sketcher_3d, measure_pack)
-    singular_best_program = fetch_singular_expr_eval(singular_best_program.tensor(), temperature=0.1, relaxed_eval=False).sympy()
     if args.save_html:
+        singular_best_program_resolved = fetch_singular_expr_eval(singular_best_program.tensor(), temperature=0.1, 
+                                                                  relaxed_eval=False).sympy()
         save_file_name = os.path.join(save_dir, "best_program.html")
-        html_code = save_html(singular_best_program, save_file_name)
+        html_code = save_html(singular_best_program_resolved, save_file_name)
         logger.info(f"Saved HTML to {save_file_name}")
     if args.save_edit_html:
+        singular_best_program_resolved = fetch_singular_expr_eval(singular_best_program.tensor(), temperature=0.1, 
+                                                                relaxed_eval=False, remove_marker=False, 
+                                                                use_euler_angle=True).sympy()
         save_file_name = os.path.join(save_dir, "best_edit_mode.html")
-        html_code = save_edit_mode_html(singular_best_program, sketcher_3d, save_file_name)
+        html_code = save_edit_mode_html(singular_best_program_resolved, sketcher_3d, save_file_name)
         logger.info(f"Saved HTML to {save_file_name}")
     if args.save_mesh:
         save_file_name = os.path.join(save_dir, "full_mesh.obj")
@@ -104,7 +124,7 @@ def main_shape_wise(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input_file", type=str, required=True)
+    parser.add_argument("--input_path", type=str, required=True)
     parser.add_argument("--save_dir", type=str, required=True)
     parser.add_argument("--profile_path", type=str, required=False, default=None)
     parser.add_argument("--fastmode", action="store_true", required=False, default=False)
@@ -125,4 +145,4 @@ if __name__ == "__main__":
         pstats.Stats(args.profile_path).strip_dirs().sort_stats("cumtime").print_stats(50)
     else:
         main_shape_wise(args)
-# python scripts/mesh_to_pa.py --input_file /media/aditya/OS/data/toys_4k/toys4k_obj_files/airplane/airplane_007/mesh.obj --save_dir ../outputs/basic
+# python scripts/mesh_to_pa.py --input_path /media/aditya/OS/data/toys_4k/toys4k_obj_files/airplane/airplane_007/mesh.obj --save_dir ../outputs/basic

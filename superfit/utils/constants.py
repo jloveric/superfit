@@ -1,3 +1,19 @@
+"""
+ADOBE
+
+Copyright 2026 Adobe
+
+All Rights Reserved.
+
+NOTICE: All information contained herein is, and remains
+the property of Adobe and its suppliers, if any. The intellectual
+and technical concepts contained herein are proprietary to Adobe
+and its suppliers and are protected by all applicable intellectual
+property laws, including trade secret and copyright laws.
+Dissemination of this information or reproduction of this material
+is strictly forbidden unless prior written permission is obtained
+from Adobe.
+"""
 USE_CUDA = True
 CLEAN_UP_DELTA = 0.005
 MIN_VOLUME_LIMIT = 0.0001
@@ -14,5 +30,5 @@ PARTOBJAVERSE_MESH_DIR = f"{PARTOBJAVERSE_BASE}/PartObjaverse-Tiny/PartObjaverse
 PARTOBJAVERSE_INSTANCE_DIR = f"{PARTOBJAVERSE_BASE}/PartObjaverse-Tiny_instance_gt"
 AOT_ARTIFACT_DIR = f"{DATA_BASE}/project_neo/aot"
 SAVE_DIR_BASE = OUTPUTS_BASE
-TOY4K_CSV_FILE = "superfit/dataset/spilts/new_testset.csv"
+TOY4K_CSV_FILE = "superfit/dataset/new_testset.csv"
 SEMANTIC_LOC = f"{PROJECT_BASE}/PartField/"

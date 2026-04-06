@@ -42,13 +42,21 @@ SuperGeon extends SuperFrustum with three additional parameters -- `trapeze` (as
 
 SuperFrustum is the primary primitive used in the paper. It is parameterized by 8 values: `size` (3), `roundness`, `dilate_3d`, `taper`, `bulge`, and `onion`. This compact parameterization spans cuboids, cylinders, spheres, cones, capsules, toroidal variants, and their tapered, bent, and hollow forms.
 
-The construction builds on analytic SDF functions developed by the ShaderToy and demoscene communities -- specifically Paniq's [sdUberprim](https://www.shadertoy.com/view/MsVGWG) and related work by Inigo Quilez ([sdSuperprim](https://www.shadertoy.com/view/Xdy3Rm), [ChamferBox SP](https://www.shadertoy.com/view/3lBGzt)). SuperFit adapts these formulations for inverse design: the SDF is C0-continuous and differentiable almost everywhere with respect to all parameters, enabling robust gradient-based fitting without non-differentiable heuristics.
+The construction builds on analytic SDF functions developed by the ShaderToy and demoscene communities -- specifically Paniq's [sdUberprim](https://www.shadertoy.com/view/MsVGWG) and related work by Inigo Quilez ([sdSuperprim](https://www.shadertoy.com/view/Xdy3Rm), [ChamferBox SP](https://www.shadertoy.com/view/3lBGzt)). SuperFit extends `sdUberprim` by introducing the "bulge" based bending. More importantly, we show that with some reparameterization, these super-primitives are suitable for inverse design: the SDF is C0-continuous and differentiable almost everywhere with respect to all parameters, enabling robust gradient-based fitting without non-differentiable heuristics.
 
-The name "SuperFrustum" was coined by Matheus Gadelha.
+The name "SuperFrustum" was coined by [Matheus Gadelha](http://mgadelha.me).
 
 ## Reconstruction Performance. 
 
-Add table comparing the different methods. 
+Note for all 
+
+| ablation | iou | bidir_iou | cd | n_prims | overlap | unoverlap | total_time | n_iters |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Cuboid | 0.8516 | 0.7810 | 0.2952 | 21.1695 | 0.2144 | 0.2201 | 620.4176 | 5.5377 |
+| SuperQuadric | 0.8496 | 0.7980 | 0.9823 | 17.4268 | 0.2071 | 0.0199 | 533.5698 | 4.6590 |
+| SPProto | 0.8746 | 0.8226 | 0.2745 | 20.9937 | 0.2406 | 0.0590 | 735.9650 | 5.4854 |
+| SuperFrustum | 0.8868 | 0.8373 | 0.2204 | 20.3556 | 0.2499 | 0.0438 | 1118.7865 | 5.4644 |
+| SuperGeon | 0.8876 | 0.8392 | 0.2347 | 19.4184 | 0.2540 | 0.0300 | 1130.2016 | 5.2720 |
 
 
 ## Attribution

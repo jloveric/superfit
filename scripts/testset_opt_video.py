@@ -1,5 +1,20 @@
 """
-Batch script to generate optimization videos from shape folders under input_dir.
+ADOBE
+
+Copyright 2026 Adobe
+
+All Rights Reserved.
+
+NOTICE: All information contained herein is, and remains
+the property of Adobe and its suppliers, if any. The intellectual
+and technical concepts contained herein are proprietary to Adobe
+and its suppliers and are protected by all applicable intellectual
+property laws, including trade secret and copyright laws.
+Dissemination of this information or reproduction of this material
+is strictly forbidden unless prior written permission is obtained
+from Adobe.
+
+Batch script to generate optimization videos from shape folders under input_path.
 """
 import os
 import argparse
@@ -11,10 +26,10 @@ from superfit.utils.logger import logger
 def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
-        description="Generate optimization videos for folders under input_dir."
+        description="Generate optimization videos for folders under input_path."
     )
     parser.add_argument(
-        "--input_dir",
+        "--input_path",
         type=str,
         required=True,
         help="Directory containing one subdir per folder_name, each with primitive_assembly.pkl (e.g. path/to/toys4k/ablation_0_param)",
@@ -44,7 +59,7 @@ def parse_args():
         type=str,
         nargs="*",
         default=None,
-        help="Optional explicit folder names. If omitted, all subdirectories under input_dir are processed.",
+        help="Optional explicit folder names. If omitted, all subdirectories under input_path are processed.",
     )
     args = parser.parse_args()
 
@@ -65,11 +80,11 @@ def parse_args():
 
 
 def main(args: argparse.Namespace):
-    """Generate optimization videos for each selected folder under input_dir."""
+    """Generate optimization videos for each selected folder under input_path."""
     if args.folders is None:
         folder_names = sorted(
-            d for d in os.listdir(args.input_dir)
-            if os.path.isdir(os.path.join(args.input_dir, d)) and not d.startswith(".")
+            d for d in os.listdir(args.input_path)
+            if os.path.isdir(os.path.join(args.input_path, d)) and not d.startswith(".")
         )
     else:
         folder_names = args.folders
@@ -79,21 +94,21 @@ def main(args: argparse.Namespace):
         return
 
     for folder_name in folder_names:
-        shape_dir = os.path.join(args.input_dir, folder_name)
-        input_file = os.path.join(shape_dir, "primitive_assembly.pkl")
+        shape_dir = os.path.join(args.input_path, folder_name)
+        input_path = os.path.join(shape_dir, "primitive_assembly.pkl")
 
-        if not os.path.exists(input_file):
-            logger.warning(f"Skipping {folder_name}: pkl not found at {input_file}")
+        if not os.path.exists(input_path):
+            logger.warning(f"Skipping {folder_name}: pkl not found at {input_path}")
             continue
 
         logger.info(f"Generating videos for: {folder_name}")
-        logger.info(f"  Input: {input_file}")
+        logger.info(f"  Input: {input_path}")
         logger.info(f"  Save dir: {shape_dir}")
 
         try:
-            info_dict = cPickle.load(open(input_file, "rb"))
+            info_dict = cPickle.load(open(input_path, "rb"))
         except Exception as e:
-            logger.error(f"Failed to load {input_file}: {e}")
+            logger.error(f"Failed to load {input_path}: {e}")
             continue
 
         n_iters = info_dict.get("n_iters", 0)

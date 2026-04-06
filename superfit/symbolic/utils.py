@@ -1,3 +1,19 @@
+"""
+ADOBE
+
+Copyright 2026 Adobe
+
+All Rights Reserved.
+
+NOTICE: All information contained herein is, and remains
+the property of Adobe and its suppliers, if any. The intellectual
+and technical concepts contained herein are proprietary to Adobe
+and its suppliers and are protected by all applicable intellectual
+property laws, including trade secret and copyright laws.
+Dissemination of this information or reproduction of this material
+is strictly forbidden unless prior written permission is obtained
+from Adobe.
+"""
 import numpy as np
 import torch as th
 import sympy as sp
@@ -94,6 +110,14 @@ SFSP_CONVERSION_MAP = {
     sps.SuperGeon: sps.SGSP,
 }
 
+INVERSE_PRIM_MAP = {
+    "VarAxisSF": "SuperFrustum",
+    "VarAxisSQ": "SuperQuadric",
+    "VarAxisSPP": "SPProto",
+    "VarAxisSG": "SuperGeon",
+    "Cuboid": "Cuboid",
+    "SuperFrustum": "SuperFrustum",
+}
 
 def sample_gumbel(shape, eps=1e-10, device=None, dtype=th.float32):
     U = th.rand(shape, device=device, dtype=dtype)
@@ -205,15 +229,6 @@ def recursive_prim_to_packed(gls_expr):
         else:
             return gls_expr
 
-def convert_axis_angle_to_euler(axis_angle: th.Tensor) -> th.Tensor:
-    return rotf.convert_axis_angle_to_euler(axis_angle)
-
-
-def recursive_axisangle_to_eulerangle(gls_expr):
-    return rotf.recursive_axisangle_to_eulerangle(gls_expr)
-
-
-
 def n_prims_in_expr(expr, n_prims=0):
     if isinstance(expr, PRIM_TYPE):
         return n_prims + 1
@@ -281,7 +296,7 @@ def fetch_singular_expr_eval(expr, temperature=0.1, relaxed_eval=True, remove_ma
         if fix_axis_variant:
             in_expr = convert_marked_axis_variant_to_single_rotation(in_expr, use_euler_angle=use_euler_angle)
         if use_euler_angle:
-            in_expr = recursive_axisangle_to_eulerangle(in_expr)
+            in_expr = rotf.recursive_axisangle_to_eulerangle(in_expr)
         else:
             in_expr = rotf.recursive_eulerangle_to_axisangle(in_expr)
         if remove_marker:
@@ -435,6 +450,10 @@ def gather_smooth_union_ops(program, prim_list=None):
 
 
 def generate_from_sm_ops_and_primitives(sm_ops, primitives):
+    if len(primitives) == 0:
+        return None
+    if len(sm_ops) == 0:
+        return primitives[0]
     expr = None
     for i in range(len(sm_ops)):
         if expr is None:
@@ -566,6 +585,7 @@ def convert_marked_axis_variant_to_single_rotation(translate_expr: gls.GLBase, u
     into:
       Translate3D( EulerRotate3D(BasePrim(permute size), euler), t ) 
     """
+
     if not isinstance(translate_expr, gls.Translate3D):
         raise TypeError(
             "Expected PrimitiveMarker.args[0] to be Translate3D("

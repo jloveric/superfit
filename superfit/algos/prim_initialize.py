@@ -1,3 +1,19 @@
+"""
+ADOBE
+
+Copyright 2026 Adobe
+
+All Rights Reserved.
+
+NOTICE: All information contained herein is, and remains
+the property of Adobe and its suppliers, if any. The intellectual
+and technical concepts contained herein are proprietary to Adobe
+and its suppliers and are protected by all applicable intellectual
+property laws, including trade secret and copyright laws.
+Dissemination of this information or reproduction of this material
+is strictly forbidden unless prior written permission is obtained
+from Adobe.
+"""
 # Code to initialize primitive from a given sdf volume. 
 import torch as th
 import numpy as np
@@ -74,7 +90,6 @@ def initialize_sp_prims(prim_params, sketcher):
     elif issubclass(version, sps.VarAxisSF):
         taper_amount = prim_params.get("taper", (SCALE_INIT_VAL,))
         onion_amount = prim_params.get("onion_amount", (ONION_INIT_VAL,))
-        roundness = prim_params.get("roundness", (ROUNDNESS_INIT_VAL,))
         roundness = prim_params.get("roundness", (ROUNDNESS_INIT_VAL,))
         # Highly likely to be type 1. 
         init_logits = (VARAXIS_INIT_VAL, -VARAXIS_INIT_VAL, -VARAXIS_INIT_VAL)
