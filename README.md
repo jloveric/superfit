@@ -4,13 +4,14 @@
   <img src="assets/banner.jpeg" alt="Banner" />
 </p>
 
-## What is it?
 
-SuperFit fits compact assemblies of **SuperFrusta** and other primitives to 3D shapes. **[Project page](https://bardofcodes.github.io/superfit)** · **[arXiv](https://arxiv.org/abs/2512.09201)**. Built on top of **[SySL](https://github.com/BardOfCodes/sysl)**. See **[Install](#install-instructions)** below and **[BibTeX](#bibtex)**.
+SuperFit fits compact assemblies of **SuperFrusta** and other primitives to 3D shapes, built on top of **[SySL](https://github.com/BardOfCodes/sysl)**.
+**[Project Page](https://bardofcodes.github.io/superfit)** · **[arXiv](https://arxiv.org/abs/2512.09201)**
+See **[Install](#install-instructions)** below and **[BibTeX](#bibtex)**.
 
 ## Install Instructions
 
-Clone and create the conda environment:
+### 1. Create the conda environment
 
 ```bash
 git clone https://github.com/BardOfCodes/superfit.git
@@ -19,7 +20,35 @@ conda env create -f env.yml
 conda activate superfit
 ```
 
-### Path Configuration
+This installs PyTorch 2.9.1 (CUDA 12.8), all core Python dependencies, and `superfit` itself in editable mode.
+
+### 2. Install cubvh
+
+[cubvh](https://github.com/ashawkey/cubvh) provides GPU-accelerated BVH queries and is required by the fitting pipeline.
+
+```bash
+git clone https://github.com/ashawkey/cubvh.git
+cd cubvh
+python setup.py install
+cd ..
+```
+
+### 3. Install kaolin
+
+[Kaolin](https://github.com/NVIDIAGameWorks/kaolin) is used for FlexiCubes meshing. See the [kaolin installation docs](https://kaolin.readthedocs.io/en/latest/notes/installation.html) for full details.
+
+```bash
+git clone --recursive https://github.com/NVIDIAGameWorks/kaolin.git
+cd kaolin
+pip install -r tools/build_requirements.txt -r tools/viz_requirements.txt -r tools/requirements.txt
+export IGNORE_TORCH_VER=1
+python setup.py install
+cd ..
+```
+
+> **Note:** `IGNORE_TORCH_VER=1` is needed because kaolin's version check may not yet list PyTorch 2.9.
+
+### 4. Path Configuration
 
 Before running any scripts, edit `superfit/utils/constants.py` and set the three base paths for your machine:
 
@@ -31,14 +60,7 @@ OUTPUTS_BASE = "/path/to/your/outputs"
 
 All dataset and artifact locations are derived from these. See [notes/dataset.md](notes/dataset.md) for details on expected data layout.
 
-### Additional Dependencies
-
-The following packages will need to be manually installed according to pytorch and cuda version. Please follow the instructions given in the respective repositories:
-
-- [cubvh](https://github.com/ashawkey/cubvh)
-- [kaolin](https://github.com/NVIDIAGameWorks/kaolin) (optional, for some notebooks)
-
-## What can you do with it?
+## What can you do with this repository?
 
 ### 1. Convert (watertight) meshes into Primitive Assemblies
 
@@ -132,7 +154,10 @@ The [`notebooks/`](notebooks/) folder contains a few iPython Notebooks which dem
 
 ## Acknowledgements
 
-This work was done during an internship at Adobe Research.
-Thanks to all co-authors -- [Matheus Gadelha](https://mgadelha.me/), [Thibault Groueix](https://www.tgroueix.com/), [Zhiqin Chen](https://czq142857.github.io/), [Siddhartha Chaudhuri](https://www.cse.iitb.ac.in/~sidch/), [Vladimir G. Kim](http://www.vovakim.com/), [Wang Yifan](https://yifita.github.io/), and [Daniel Ritchie](https://dritchie.github.io/) -- and to Inigo Quilez, Anton Mikhailov, Luc Chamerlat at Adobe, and the ShaderToy community, particularly Paniq, for foundational primitive functions.
+This project was developed during an internship at Adobe Research. I (Aditya) am grateful to all co-authors for their invaluable contributions: [Matheus Gadelha](https://mgadelha.me/), [Thibault Groueix](https://www.tgroueix.com/), [Zhiqin Chen](https://czq142857.github.io/), [Siddhartha Chaudhuri](https://www.cse.iitb.ac.in/~sidch/), [Vladimir G. Kim](http://www.vovakim.com/), [Wang Yifan](https://yifita.github.io/), and [Daniel Ritchie](https://dritchie.github.io/).
+
+Our sphere-tracing primitives and shaders draw heavily on foundational work by Inigo Quilez, and the broader [ShaderToy](https://www.shadertoy.com/) community — with special thanks to Paniq for creating the `superprimitive` and `uberprimitive` functions. 
+
+Finally, Anton Mikhailov, Daichi Ito, and Luc Chamerlat from Adobe provided valuable feedback aroud primitive design, and artist needs.
 
 For questions reach out at `adityaganeshan@gmail.com`.
