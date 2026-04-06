@@ -30,7 +30,7 @@ We release pre-computed primitive-assembly results so that users can inspect out
 
 2. Toys4k 500 subset fitting with different primitives. Check `primitives.md` for their evaluation.
 
-Root: `/users/aganesh8/data/aganesh8/data/project_neo/sf_release/toys4k`
+Root: `/users/aganesh8/data/aganesh8/data/project_sf/sf_release/toys4k`
 
 | Type | Folder |
 |------|--------|

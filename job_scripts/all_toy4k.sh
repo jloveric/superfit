@@ -20,7 +20,7 @@ NUM_GPUS=$3
 ABLATION=${4:-0}
 AOT_POSTFIX=${5:-aott}
 # Log directory configuration
-LOG_DIR="/users/aganesh8/data/aganesh8/projects/project_neo/logs"
+LOG_DIR="/users/aganesh8/data/aganesh8/projects/project_sf/logs"
 mkdir -p "$LOG_DIR"
 
 # Calculate total items and items per GPU
@@ -28,8 +28,8 @@ TOTAL_ITEMS=$((END_IND - START_IND))
 ITEMS_PER_GPU=$((TOTAL_ITEMS / NUM_GPUS))
 REMAINDER=$((TOTAL_ITEMS % NUM_GPUS))
 
-SCRIPT_DIR="/users/aganesh8/data/aganesh8/projects/project_neo/superfit"
-ENV_FILE="/users/aganesh8/data/aganesh8/projects/project_neo/.env"
+SCRIPT_DIR="/users/aganesh8/data/aganesh8/projects/project_sf/superfit"
+ENV_FILE="/users/aganesh8/data/aganesh8/projects/project_sf/.env"
 
 echo "Starting jobs: indices $START_IND to $END_IND across $NUM_GPUS GPUs"
 echo "Items per GPU: $ITEMS_PER_GPU (with $REMAINDER GPUs getting 1 extra)"
@@ -69,7 +69,7 @@ for ((gpu=0; gpu<NUM_GPUS; gpu++)); do
         python scripts/testset_fit_primitives.py --start_ind $CURRENT_START --end_ind $CURRENT_END --ablation $ABLATION --fastmode --aot_postfix $AOT_POSTFIX
         # python scripts/testset_fit_partwise.py --start_ind $CURRENT_START --end_ind $CURRENT_END --ablation $ABLATION --fastmode  --aot_postfix $AOT_POSTFIX
         # python scripts/testset_fit_primitives.py --start_ind $CURRENT_START --end_ind $CURRENT_END --ablation $ABLATION --fastmode --overwrite --aot_postfix $AOT_POSTFIX --dataset partobjaverse
-        # python scripts/texture_on_testset.py --start_ind $CURRENT_START --end_ind $CURRENT_END --input_path /users/aganesh8/data/aganesh8/data/project_neo/outputs/partobjaverse/ablation_2_param --save_html
+        # python scripts/texture_on_testset.py --start_ind $CURRENT_START --end_ind $CURRENT_END --input_path /users/aganesh8/data/aganesh8/data/project_sf/outputs/partobjaverse/ablation_2_param --save_html
     ) > "${LOG_DIR}/proc_${gpu}_${AOT_POSTFIX}.out" 2>&1 &
     
     CURRENT_START=$CURRENT_END

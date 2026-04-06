@@ -54,7 +54,7 @@ Before running any scripts, edit `superfit/utils/constants.py` and set the three
 
 ```python
 DATA_BASE = "/path/to/your/data"
-PROJECT_BASE = "/path/to/your/projects/project_neo"
+PROJECT_BASE = "/path/to/your/projects/project_sf"
 OUTPUTS_BASE = "/path/to/your/outputs"
 ```
 
