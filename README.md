@@ -49,7 +49,7 @@ python scripts/mesh_to_assembly.py --input_path <path> --save_dir <save-dir> --f
 This will convert an input image into a compact assembly of SuperFrusta. Use different `--ablation` options to generate assemblies of cuboids/superquadrics/supergeons etc. Note that `--fastmode` saves torch compile artifacts at `AOT_ARTIFACT_DIR` as specified in `superfit/utils/constants.py`.
 
 <p align="center">
-  <img src="assets/mesh_to_assembly.jpg" alt="Mesh to primitive assembly" />
+  <img src="assets/mesh_to_assembly.jpg" alt="Mesh to primitive assembly" style="max-width: 512px; width: 100%;" />
 </p>
 
 If the input mesh contains textures, you can run `fit_textures.py` to add textures to the primitive assembly. This will add 2D spherical textures to each primitive. We also have the `testset_fit_textures.py` for running this process across multiple inputs. 
@@ -70,11 +70,11 @@ python scripts/generate_opt_video.py --input_path <path-to-assembly-pkl> --save_
 ```
 
 <p align="center">
-  <img src="assets/optimization_video.png" alt="Optimization video" />
+  <img src="assets/opt_video.gif" alt="Optimization video" />
 </p>
 
 
-Note that we don't generate html shaders for SuperQuadric since we don't have analytical sphere-tracable SDF functions for them. Additionally, please change the configuration in `superfit/utils/config.py` if needed.
+Note that we don't generate html shaders for SuperQuadric since we don't have analytical sphere-tracable SDF functions for them. Additionally, please change the configuration in `superfit/utils/config.py` and `superfit/utils/render_seq.py` if needed.
 
 ### 2. Evaluation on TestSet
 
@@ -98,6 +98,11 @@ For the semantic metrics, we require [faiss](https://github.com/facebookresearch
 
 ### 3. Explore Fitting Results & Generate Detailed Meshes
 
+| Assembly Visualizer | Primitive-guided Generation |
+| --- | --- |
+| <p align="center"><img src="assets/app_visualizer.png" alt="Assembly Visualizer" /></p> | <p align="center"><img src="assets/app_edit_mode.png" alt="Primitive-guided Generation" /></p> |
+
+
 We also provide a complimentary web app to explore the primitive assemblies - the fitting process, the metrics, the generated shapes etc. 
 
 
@@ -110,7 +115,7 @@ Find instructions to install and run this at [superfit_app](https://github.com/B
 
 Details regarding the dataset are provided in [notes/dataset.md](notes/dataset.md). For details regarding the primitives check out [notes/primitives.md](notes/primitives.md). We also made quite a few improvements over the results after our CVPR submission. These are listed in [notes/post_submission.md](notes/post_submission.md).
 
-The [`notebooks/`](notebooks/) folder contains a few iPython Notebooks which demo different aspects of our method such as (a) primitive design exploration in [notebooks/primitive_design.ipynb](notebooks/primitive_design.ipynb), (b) curvature exploration in [notebooks/curvature.ipynb](notebooks/curvature.ipynb), (c) morphological decomposition in [notebooks/msd.ipynb](notebooks/msd.ipynb), and (d) evaluation statistics in [notebooks/eval_stats.ipynb](notebooks/eval_stats.ipynb). 
+The [`notebooks/`](notebooks/) folder contains a few iPython Notebooks which demo different aspects of our method such as (a) primitive design exploration in [notebooks/primitive_design.ipynb](notebooks/primitive_design.ipynb), (b) curvature exploration in [notebooks/curvature.ipynb](notebooks/curvature.ipynb), and (c) morphological decomposition in [notebooks/msd.ipynb](notebooks/msd.ipynb). 
 
 
 ## BibTeX

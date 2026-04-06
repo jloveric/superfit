@@ -24,6 +24,7 @@ Supports --start_ind / --end_ind for parallel runs; summary filename includes th
 """
 import os
 import re
+import numpy as np
 import argparse
 import traceback
 from typing import Optional, Dict, List, Any
@@ -189,7 +190,8 @@ def main():
         vals = [m[k] for m in all_metrics if k in m and m[k] is not None]
         if vals:
             record[k] = vals
-    means = {k: sum(v) / len(v) for k, v in record.items()}
+            
+    means = {k: np.nanmean(v) for k, v in record.items()}
 
     summary = {"means": means, "record": record}
     out_name = f"eval_summary_start{start}_end{end}.pkl"

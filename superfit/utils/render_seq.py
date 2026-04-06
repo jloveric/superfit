@@ -31,7 +31,9 @@ from .logger import logger
 from ..symbolic.utils import fetch_singular_expr_eval, INVERSE_PRIM_MAP
 
 LOG_FREQ = 10
-
+FRAME_SAMPLING_RATE = 1    # Render every 10th frame.
+CAMERA_MOVEMENT_MAGNITUDE = 0.3
+CAMERA_MOVEMENT_FREQUENCY = 1.0
 RENDER_SETTINGS = {
     "variables": {
         "_AA": 1,
@@ -56,8 +58,9 @@ def get_expr_at_iter(param_dict, handler, cur_iter):
     expression = convert_to_unpacked(unbatched_packed_expr, handler)
     return expression
 
-def render_via_param_seq(in_param_dict, handler, frame_sampling_rate=10, 
-                         camera_movement_magnitude=0.3, camera_movement_frequency=1.0, 
+def render_via_param_seq(in_param_dict, handler, frame_sampling_rate=FRAME_SAMPLING_RATE, 
+                         camera_movement_magnitude=CAMERA_MOVEMENT_MAGNITUDE, 
+                         camera_movement_frequency=CAMERA_MOVEMENT_FREQUENCY, 
                          version="v4"):
     param_dict = {x:y[::frame_sampling_rate] for x, y in in_param_dict.items()}
     some_param = param_dict[0]

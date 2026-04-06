@@ -36,7 +36,7 @@ def parse_args():
                        help="Directory to save videos. Defaults to the same directory as input_path")
     parser.add_argument("--save_name", type=str, default="opt_video",
                        help="Base name for saved video files (default: opt_video)")
-    parser.add_argument("--no-save-seperately", dest="save_seperately", action="store_false", default=True,
+    parser.add_argument("--no_save_seperately", dest="save_seperately", action="store_false", default=True,
                        help="Save all iterations in a single video file (default: save separately)")
     
     args = parser.parse_args()
