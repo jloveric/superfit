@@ -26,7 +26,7 @@ from ..symbolic.symbolic_types import VALID_BATCHED_STOCHASTIC_SU_CLASSES
 from ..utils.config import AlgorithmConfig as AlgConf
 from ..utils.stats import Stats
 from ..utils.logger import logger
-from ..utils.mesh_sdf import sdf_to_mesh_sketcher, get_target_cubvh
+from ..utils.mesh_sdf import sdf_to_mesh, get_target_cubvh
 from .utils import (perform_batched_stochastic_precondition, exponential_temperature_schedule,
                     perform_batched_stochastic_precondition_with_curvature, 
                     recompute_sdf_from_BVH, get_mask_scaled_aabb, quick_sample_points)
@@ -194,7 +194,7 @@ def run_optimization_loop_fast(init_opt_program, target_mesh, in_target, sketche
                 print("Sampling on pred mesh")
                 with th.no_grad():
                     _, full_output_sdf = compiled_ops.compiled_assembly_execution(sketcher.get_base_coords().unsqueeze(0), transformed_params)
-                    pred_mesh = sdf_to_mesh_sketcher(full_output_sdf[0].detach(), sketcher)
+                    pred_mesh = sdf_to_mesh(full_output_sdf[0].detach(), sketcher)
                 n_orig_points = int(surface_adj_points.shape[0] * AlgConf.BIDIR_SAMPLE_RATIO) 
                 n_new_points = surface_adj_points.shape[0] - n_orig_points
                 if not pred_mesh.vertices.shape[0] == 0:

@@ -74,7 +74,7 @@ def map_arc_bulge(points, z, bulge, eps=1e-5):
     out = out * th.sign(bulge)[:, :, None]
     return out
 
-def axis_angle_to_rotation_matrix(axis_angle: th.Tensor) -> th.Tensor:
+def old_axis_angle_to_rotation_matrix(axis_angle: th.Tensor) -> th.Tensor:
     """
     Convert an axis-angle vector (..., 3) to a rotation matrix (..., 3, 3)
     using the Rodrigues' rotation formula.
@@ -96,6 +96,33 @@ def axis_angle_to_rotation_matrix(axis_angle: th.Tensor) -> th.Tensor:
     cos = th.cos(theta)[:, None]
 
     R = I + sin * K + (1 - cos) * (K @ K)  # Rodrigues' formula
+
+    return R
+
+def axis_angle_to_rotation_matrix(axis_angle: th.Tensor, eps: float = 1e-8) -> th.Tensor:
+
+    if axis_angle.ndim != 2 or axis_angle.shape[-1] != 3:
+        raise ValueError(f"Expected (B, 3), got {tuple(axis_angle.shape)}")
+
+    B = axis_angle.shape[0]
+    theta = th.linalg.norm(axis_angle, dim=-1, keepdim=True)  # (B, 1)
+    axis = axis_angle / theta.clamp_min(eps)
+    x, y, z = axis.unbind(-1)
+
+    zero = th.zeros_like(x)
+    K = th.stack([
+
+        zero, -z,    y,
+
+         z,  zero,  -x,
+
+        -y,   x,   zero
+
+    ], dim=-1).reshape(B, 3, 3)
+    I = th.eye(3, device=axis_angle.device, dtype=axis_angle.dtype).unsqueeze(0).expand(B, 3, 3)
+    sin = th.sin(theta).unsqueeze(-1)   # (B,1,1)
+    cos = th.cos(theta).unsqueeze(-1)   # (B,1,1)
+    R = I + sin * K + (1.0 - cos) * (K @ K)
 
     return R
 
