@@ -1,12 +1,20 @@
 # SuperFit: Residual Primitive Fitting with SuperFrusta
 
 <p align="center">
+  <a href="https://arxiv.org/abs/2512.09201">
+    <img src="https://img.shields.io/badge/arXiv-2512.09201-b31b1b?logo=arxiv&logoColor=white" alt="arXiv">
+  </a>
+  <a href="https://bardofcodes.github.io/superfit">
+    <img src="https://img.shields.io/badge/Project%20Page-Online-brightgreen?logo=googlechrome&logoColor=white" alt="Project Page">
+  </a>
+</p>
+
+<p align="center">
   <img src="assets/banner.jpeg" alt="Banner" />
 </p>
 
 
 SuperFit fits compact assemblies of **SuperFrusta** and other primitives to 3D shapes, built on top of **[SySL](https://github.com/BardOfCodes/sysl)**.
-**[Project Page](https://bardofcodes.github.io/superfit)** · **[arXiv](https://arxiv.org/abs/2512.09201)**
 See **[Install](#install-instructions)** below and **[BibTeX](#bibtex)**.
 
 ## Install Instructions

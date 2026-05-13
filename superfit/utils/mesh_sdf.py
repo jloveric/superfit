@@ -14,6 +14,7 @@ Dissemination of this information or reproduction of this material
 is strictly forbidden unless prior written permission is obtained
 from Adobe.
 """
+from kaolin.non_commercial.flexicubes import FlexiCubes
 import numpy as np
 import torch as th
 import fastsweep
@@ -24,7 +25,6 @@ import cubvh
 import cc3d
 import time
 from geolipi.torch_compute import recursive_evaluate
-from kaolin.non_commercial.flexicubes import FlexiCubes
 
 if not USE_CUDA:
     from drjit.llvm import TensorXf

@@ -324,7 +324,6 @@ def _rotation_matrix_to_axis_angle_batched(R: th.Tensor, eps: float = 1e-6) -> t
 
     return out
 
-    import torch as th
 
 def rotation_matrix_to_axis_angle_batched(R: th.Tensor, eps: float = EPS_ROT) -> th.Tensor:
     if R.ndim != 3 or R.shape[1:] != (3, 3):
