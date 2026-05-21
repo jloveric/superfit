@@ -1,30 +1,22 @@
+# SPDX-FileCopyrightText: 2026 Aditya Ganeshan
+# SPDX-License-Identifier: MIT
+
 """
-ADOBE
-
-Copyright 2026 Adobe
-
-All Rights Reserved.
-
-NOTICE: All information contained herein is, and remains
-the property of Adobe and its suppliers, if any. The intellectual
-and technical concepts contained herein are proprietary to Adobe
-and its suppliers and are protected by all applicable intellectual
-property laws, including trade secret and copyright laws.
-Dissemination of this information or reproduction of this material
-is strictly forbidden unless prior written permission is obtained
-from Adobe.
-
 Batch script to generate optimization videos from shape folders under input_path.
+
+Uses ``legacy_opt`` mode from the unified visualize CLI (``generate_renders``).
 """
-import os
+from __future__ import annotations
+
 import argparse
-import _pickle as cPickle
-from superfit.utils.render_seq import generate_renders
+import os
+
+from superfit.visualize.render_seq import generate_renders
+from superfit.visualize.video_generators import load_info_dict
 from superfit.utils.logger import logger
 
 
-def parse_args():
-    """Parse command line arguments."""
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Generate optimization videos for folders under input_path."
     )
@@ -32,46 +24,45 @@ def parse_args():
         "--input_path",
         type=str,
         required=True,
-        help="Directory containing one subdir per folder_name, each with primitive_assembly.pkl (e.g. path/to/toys4k/ablation_0_param)",
+        help="Directory with one subdir per shape, each containing primitive_assembly.pkl",
     )
     parser.add_argument(
         "--save_name",
         type=str,
         default=None,
-        help="Base name for saved video files (default: opt_video)",
+        help="Base name for saved video files (default: opt_video_ablation_<n>)",
     )
     parser.add_argument("--ablation", type=int, default=0, help="Ablation number for output naming.")
     parser.add_argument(
         "--mode",
         type=str,
         default="all",
-        help="Mode: 'all' to render all iterations, or an integer for a specific iteration index",
+        help="legacy_opt mode: 'all' or resfit iter index",
     )
     parser.add_argument(
         "--no-save-separately",
         dest="save_separately",
         action="store_false",
         default=True,
-        help="Save all iterations in a single video (default: save each iteration separately)",
+        help="Save all iterations in a single video (default: save each separately)",
     )
     parser.add_argument(
         "--folders",
         type=str,
         nargs="*",
         default=None,
-        help="Optional explicit folder names. If omitted, all subdirectories under input_path are processed.",
+        help="Optional explicit folder names; default: all subdirs of input_path",
     )
     args = parser.parse_args()
 
-    # Validate mode
     if args.mode != "all":
         try:
             mode_int = int(args.mode)
             if mode_int < 0:
                 raise ValueError("Mode must be 'all' or a non-negative integer")
             args.mode = mode_int
-        except ValueError:
-            raise ValueError(f"Mode must be 'all' or an integer, got: {args.mode}")
+        except ValueError as exc:
+            raise ValueError(f"Mode must be 'all' or an integer, got: {args.mode}") from exc
 
     if args.save_name is None:
         args.save_name = f"opt_video_ablation_{args.ablation}"
@@ -79,11 +70,11 @@ def parse_args():
     return args
 
 
-def main(args: argparse.Namespace):
-    """Generate optimization videos for each selected folder under input_path."""
+def main(args: argparse.Namespace) -> None:
     if args.folders is None:
         folder_names = sorted(
-            d for d in os.listdir(args.input_path)
+            d
+            for d in os.listdir(args.input_path)
             if os.path.isdir(os.path.join(args.input_path, d)) and not d.startswith(".")
         )
     else:
@@ -106,7 +97,7 @@ def main(args: argparse.Namespace):
         logger.info(f"  Save dir: {shape_dir}")
 
         try:
-            info_dict = cPickle.load(open(input_path, "rb"))
+            info_dict = load_info_dict(input_path)
         except Exception as e:
             logger.error(f"Failed to load {input_path}: {e}")
             continue
@@ -129,7 +120,7 @@ def main(args: argparse.Namespace):
             shape_dir,
             args.save_name,
             mode=args.mode,
-            save_seperately=args.save_separately,
+            save_separately=args.save_separately,
         )
         logger.info(f"  Done. Videos saved to {shape_dir}")
 
@@ -137,5 +128,4 @@ def main(args: argparse.Namespace):
 
 
 if __name__ == "__main__":
-    args = parse_args()
-    main(args)
+    main(parse_args())

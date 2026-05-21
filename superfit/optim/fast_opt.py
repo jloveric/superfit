@@ -49,6 +49,12 @@ def run_optimization_loop_fast(init_opt_program, target_mesh, in_target, sketche
     ## Prelims
     opt_program = init_opt_program
     has_temp = isinstance(opt_program, VALID_BATCHED_STOCHASTIC_SU_CLASSES)
+    if not has_temp:
+        raise NotImplementedError(
+            "run_optimization_loop_fast requires a batched stochastic SU program; "
+            "non-stochastic batched SU optimization is not implemented because the "
+            "downstream optimizer assumes logits and temperature."
+        )
 
     device = sketcher.device
     prim_params = opt_program.get_arg(0)
@@ -191,7 +197,7 @@ def run_optimization_loop_fast(init_opt_program, target_mesh, in_target, sketche
             perturbations = (th.rand_like(surface_sampled_points) - 0.5) * AlgConf.SURFACE_ADJ_PERTURBATION_SCALE
             surface_adj_points = surface_sampled_points + perturbations
             if AlgConf.BIDIR and output_sdf is not None:
-                print("Sampling on pred mesh")
+                logger.info("Sampling on pred mesh")
                 with th.no_grad():
                     _, full_output_sdf = compiled_ops.compiled_assembly_execution(sketcher.get_base_coords().unsqueeze(0), transformed_params)
                     pred_mesh = sdf_to_mesh(full_output_sdf[0].detach(), sketcher)
@@ -446,4 +452,3 @@ def make_optimizer(param_groups):
         raise ValueError(f"Unknown optimizer type: {name}")
 
     return optim
-

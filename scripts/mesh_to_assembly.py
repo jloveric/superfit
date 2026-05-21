@@ -37,6 +37,21 @@ from superfit.symbolic.utils import gather_primitives, fetch_singular_expr_eval
 th.set_float32_matmul_precision("medium")
 
 
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--input_path", type=str, required=True)
+    parser.add_argument("--save_dir", type=str, required=True)
+    parser.add_argument("--profile_path", type=str, required=False, default=None)
+    parser.add_argument("--fastmode", action="store_true", required=False, default=False)
+    parser.add_argument("--ablation", type=int, default=0, help="Ablation number.")
+    parser.add_argument("--aot_postfix", type=str, default="aott", help="AOT artifact postfix.")
+    parser.add_argument("--save_html", action="store_true", required=False, default=False)
+    parser.add_argument("--save_edit_html", action="store_true", required=False, default=False)
+    parser.add_argument("--save_mesh", action="store_true", required=False, default=False)
+    parser.add_argument("--seed", type=int, default=42, help="Random seed used for optimization.")
+    return parser.parse_args()
+
+
 def main_shape_wise(args):
         
     input_path = args.input_path
@@ -122,20 +137,8 @@ def main_shape_wise(args):
         
     
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--input_path", type=str, required=True)
-    parser.add_argument("--save_dir", type=str, required=True)
-    parser.add_argument("--profile_path", type=str, required=False, default=None)
-    parser.add_argument("--fastmode", action="store_true", required=False, default=False)
-    parser.add_argument("--ablation", type=int, default=0, help="Ablation number.")
-    parser.add_argument("--aot_postfix", type=str, default="aott", help="AOT artifact postfix.")
-    parser.add_argument("--save_html", action="store_true", required=False, default=False)
-    parser.add_argument("--save_edit_html", action="store_true", required=False, default=False)
-    parser.add_argument("--save_mesh", action="store_true", required=False, default=False)
-    parser.add_argument("--seed", type=int, default=42, help="Random seed used for optimization.")
-
-    args = parser.parse_args()
+def cli_main():
+    args = parse_args()
     if args.profile_path is not None:
         import cProfile
         import pstats
@@ -145,4 +148,8 @@ if __name__ == "__main__":
         pstats.Stats(args.profile_path).strip_dirs().sort_stats("cumtime").print_stats(50)
     else:
         main_shape_wise(args)
+
+
+if __name__ == "__main__":
+    cli_main()
 # python scripts/mesh_to_pa.py --input_path /media/aditya/OS/data/toys_4k/toys4k_obj_files/airplane/airplane_007/mesh.obj --save_dir ../outputs/basic

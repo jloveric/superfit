@@ -183,6 +183,88 @@ def make_point2prim_distr_smu(batch_call_function):
         return cur_distr, out
     return point2prim_soft_smu
 
+def _load_custom_varaxis_sf_cuda():
+    try:
+        from superfit.custom_ops.varaxis_sf_cuda import varaxis_sf_cuda
+    except ModuleNotFoundError:
+        raise RuntimeError(
+            "CustomVASF is enabled, but `superfit.custom_ops` is not importable. "
+            "Install SuperFit in editable mode or disable AlgorithmConfig.USE_CUSTOM_OP."
+        )
+    return varaxis_sf_cuda
+
+
+def _load_custom_varaxis_sf_assembly_cuda():
+    try:
+        from superfit.custom_ops.varaxis_sf_cuda import varaxis_sf_assembly_cuda
+    except ModuleNotFoundError:
+        raise RuntimeError(
+            "CustomVASF is enabled, but `superfit.custom_ops` is not importable. "
+            "Install SuperFit in editable mode or disable AlgorithmConfig.USE_CUSTOM_OP."
+        )
+    return varaxis_sf_assembly_cuda
+
+
+def custom_varaxis_sf_packed_stochastic_eval(coords, params, logits, temperature):
+    if not coords.is_cuda or not params.is_cuda or not logits.is_cuda:
+        raise ValueError("CustomVASF requires CUDA coords, params, and logits")
+    if coords.dtype != th.float32 or params.dtype != th.float32 or logits.dtype != th.float32:
+        raise ValueError("CustomVASF requires float32 coords, params, and logits")
+    if logits.ndim != 2 or logits.shape[0] != params.shape[0] or logits.shape[1] != 2:
+        raise ValueError("CustomVASF logits must have shape (params.shape[0], 2)")
+
+    coords = coords.contiguous()
+    params = params.contiguous()
+    logits = logits.contiguous()
+
+    varaxis_sf_cuda = _load_custom_varaxis_sf_cuda()
+    inner_gumbel = sample_gumbel(
+        (params.shape[0], 3),
+        device=params.device,
+        dtype=params.dtype,
+    ).contiguous()
+    outputs = varaxis_sf_cuda(coords, params, temperature, inner_gumbel, grad_mode="auto")
+
+    outer_gumbel = sample_gumbel(logits.shape, device=logits.device, dtype=logits.dtype)
+    w = th.softmax((logits + outer_gumbel) / temperature, dim=-1)
+    w0 = w[..., 0:1]
+    w1 = w[..., 1:2]
+    return outputs * w0 + w1
+
+
+def custom_varaxis_sf_packed_stochastic_su_eval(coords, params, su_vals, logits, temperature):
+    if not coords.is_cuda or not params.is_cuda or not su_vals.is_cuda or not logits.is_cuda:
+        raise ValueError("CustomVASF requires CUDA coords, params, su_vals, and logits")
+    if (
+        coords.dtype != th.float32
+        or params.dtype != th.float32
+        or su_vals.dtype != th.float32
+        or logits.dtype != th.float32
+    ):
+        raise ValueError("CustomVASF requires float32 coords, params, su_vals, and logits")
+
+    coords = coords.contiguous()
+    params = params.contiguous()
+    su_vals = su_vals.contiguous()
+    logits = logits.contiguous()
+
+    inner_gumbel = sample_gumbel(
+        (params.shape[0], 3),
+        device=params.device,
+        dtype=params.dtype,
+    ).contiguous()
+    outer_gumbel = sample_gumbel(logits.shape, device=logits.device, dtype=logits.dtype).contiguous()
+    return _load_custom_varaxis_sf_assembly_cuda()(
+        coords,
+        params,
+        su_vals,
+        logits,
+        temperature,
+        inner_gumbel,
+        outer_gumbel,
+    )
+
+
 @register_handler
 class SFHandler(PrimitiveHandler):
     base_class = sps.SuperFrustum
@@ -259,6 +341,26 @@ class VarAxisSFHandler(PrimitiveHandler):
     batched_eval_function = batched_varaxis_sf_packed_stochastic_eval
     point2prim_hard = make_point2prim_distr_hard(batched_varaxis_sf_packed_stochastic_eval)
     point2prim_soft = make_point2prim_distr_smu(batched_varaxis_sf_packed_stochastic_eval)
+    reinit_params = reinit_params_varaxis_sf
+    get_param_loss = get_param_loss_sf
+
+
+class CustomVASFHandler(PrimitiveHandler):
+    base_class = sps.VarAxisSF
+    packed_class = sps.VarAxisSFPacked
+    packed_batched_class = sps.VarAxisSFPackedBatched
+    packed_batched_stochastic_class = sps.VarAxisSFPackedBatchedStochastic
+    packed_batched_su_class = sps.VarAxisSFPackedBatchedSU
+    packed_batched_stochastic_su_class = sps.CustomVASF
+    batched_param_size = 17
+    unpack_params = unpack_params_var_axis_sf
+    param_to_var = param_to_var_ext_sf
+    var_to_param = var_to_param_ext_sf
+    param_from_variables_fast = _ext_sf_param_from_variables_fast
+    batched_eval_function = custom_varaxis_sf_packed_stochastic_eval
+    batched_su_eval_function = custom_varaxis_sf_packed_stochastic_su_eval
+    point2prim_hard = VarAxisSFHandler.point2prim_hard
+    point2prim_soft = VarAxisSFHandler.point2prim_soft
     reinit_params = reinit_params_varaxis_sf
     get_param_loss = get_param_loss_sf
 

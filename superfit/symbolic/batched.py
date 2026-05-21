@@ -407,6 +407,16 @@ class VarAxisSFPackedBatchedStochasticSU(gls.Primitive3D):
             "temperature": {"type": "float", "optional": True},
         }
 
+class CustomVASF(gls.Primitive3D):
+    @classmethod
+    def default_specs(cls):
+        return {
+            "params": {"type": "Matrix[B, 17]"},
+            "su_vals": {"type": "Vector[B -1, 1]"},
+            "logits": {"type": "Vector[B, 2]"},
+            "temperature": {"type": "float", "optional": True},
+        }
+
 # VarAxisSG
 class VarAxisSGPackedBatched(gls.Primitive3D):
     @classmethod

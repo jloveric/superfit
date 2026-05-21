@@ -14,10 +14,5 @@ Dissemination of this information or reproduction of this material
 is strictly forbidden unless prior written permission is obtained
 from Adobe.
 """
-from .algos import *
-from .symbolic import *
-from .torch_compute import *
-from .shader import *
-from .utils import *
-from .optim import *
-from .mat_opt import *
+
+__version__ = "0.1.0"

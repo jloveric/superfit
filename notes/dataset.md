@@ -19,7 +19,34 @@ We also release `dataset/qual_testset.csv`, a small hand-selected set of shapes 
 
 ## 4. Released primitive assemblies
 
-We release pre-computed primitive-assembly results so that users can inspect outputs, run evaluation, or render visualizations without re-fitting. Please download them from huggingface [here]().
+We release pre-computed primitive-assembly results so that users can inspect outputs, run evaluation, or render visualizations without re-fitting:
+
+<https://huggingface.co/datasets/bardofcodes/superfit-primitive-assemblies>
+
+The release contains derived artifacts only: `primitive_assembly*.pkl` files,
+fit `config.json` files, manifests, metadata, and evaluation summaries. It does
+not redistribute Toys4K or PartObjaverse / Objaverse source meshes. Dataset
+materials are released for non-commercial research use under CC BY-NC 4.0; the
+small release helper scripts are MIT-licensed. The SuperFit codebase remains
+separately licensed under the license in this repository.
+
+After cloning or downloading the Hugging Face dataset, the expected top-level
+layout is:
+
+```text
+superfit-primitive-assemblies/
+├── manifest.jsonl
+├── metadata.json
+├── load_release.py
+└── dataset/
+    ├── toys4k/
+    └── partobjaverse/
+```
+
+The manifest can be inspected with standard Python. Loading a
+`primitive_assembly.pkl` may require SuperFit and its runtime dependencies
+because the pickle can contain PyTorch tensors and serialized primitive
+expressions.
 
 1. SuperFrustum fitting for toys4k. 
 
@@ -30,7 +57,7 @@ We release pre-computed primitive-assembly results so that users can inspect out
 
 2. Toys4k 500 subset fitting with different primitives. Check `primitives.md` for their evaluation.
 
-Root: `/users/aganesh8/data/aganesh8/data/project_sf/sf_release/toys4k`
+Root in the Hugging Face release: `dataset/toys4k`
 
 | Type | Folder |
 |------|--------|
@@ -47,4 +74,3 @@ Root: `/users/aganesh8/data/aganesh8/data/project_sf/sf_release/toys4k`
 | ablation | iou | bidir_iou | cd | n_prims | overlap | unoverlap | total_time | n_iters |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | PartObjaverse | 0.8983 | 0.8183 | 0.1345 | 25.1050 | 0.2530 | 0.0343 | 1270.9879 | 5.9750 |
-

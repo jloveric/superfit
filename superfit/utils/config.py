@@ -78,8 +78,8 @@ class AlgorithmConfig:
     
     DO_PRUNE: bool = True
 
-    # PRIM_TYPE: str = "VarAxisSF"
-    PRIM_TYPE: str = "SuperFrustum"
+    PRIM_TYPE: str = "VarAxisSF"
+    # PRIM_TYPE: str = "SuperFrustum"
     SMOOTHEN: bool = True
     
     # OTHER:
@@ -94,7 +94,8 @@ class AlgorithmConfig:
     AOT_ARTIFACT_FILE: str = None
     SAVE_JIT_CACHE: bool = True
     OVERWRITE_JIT_CACHE: bool = False
-    TorchCompile: bool = False
+    TORCH_COMPILE: bool = True
+    USE_CUSTOM_OP: bool = False
     COMPILED_FUNCTIONS: str = None
 
     USE_CURVATURE_WEIGHTS: bool = True
@@ -113,10 +114,10 @@ class AlgorithmConfig:
 
     # Quality Losses:
     STOCHASTIC_DROPOUT: bool = True
-    LOSS_PRIMITIVE_COUNT_ALPHA: float = 2e-3
+    LOSS_PRIMITIVE_COUNT_ALPHA: float = 3e-3
     LOSS_OVERLAP_ALPHA: float = 1e-1
     LOSS_SHAPE_UNOVERLAP_ALPHA: float = 1e-1
-    LOSS_PARAM_REGULARIZATION_ALPHA: float = 1e-5
+    LOSS_PARAM_REGULARIZATION_ALPHA: float = 1e-6
 
     # Tversky Loss:
     TVERSKY_MODE: bool = False
@@ -191,7 +192,7 @@ def fast_test_override():
     AlgorithmConfig.SAT_PATIENCE = 5
     AlgorithmConfig.RESFIT_MAX_ITER = 2
     AlgorithmConfig.SAVE_JIT_CACHE = False
-    AlgorithmConfig.TorchCompile = False
+    AlgorithmConfig.TORCH_COMPILE = False
     AlgorithmConfig.COMPILED_FUNCTIONS = None
     AlgorithmConfig.PRUNE_RESOLUTION: int = 64
     AlgorithmConfig.DECOMPOSE_RESOLUTION: int = 128
@@ -258,19 +259,6 @@ def high_cost_mode():
     AlgorithmConfig.SAT_PATIENCE: int = 150
     AlgorithmConfig.MAX_ITER: int = 2500
 
-def new_loss_lambda():
-    AlgorithmConfig.SURFACE_ADJ_PERTURBATION_SCALE: float = 0.05 # 0.05
-    AlgorithmConfig.LOSS_OCC_ALPHA: float = 2.0
-    AlgorithmConfig.LOSS_SURFACE_ADJ_OCC_ALPHA: float = 2.0
-    AlgorithmConfig.LOSS_SURFACE_SDF_ALPHA: float = 1.0
-    AlgorithmConfig.LOSS_SURFACE_ADJ_SDF_ALPHA: float = 1.0
-    AlgorithmConfig.LOSS_PRIMITIVE_COUNT_ALPHA: float = 2e-3
-    AlgorithmConfig.LOSS_OVERLAP_ALPHA: float = 1e-1
-    AlgorithmConfig.LOSS_SHAPE_UNOVERLAP_ALPHA: float = 1e-1
-    AlgorithmConfig.LOSS_PARAM_REGULARIZATION_ALPHA: float = 1e-5
-    AlgorithmConfig.CURVATURE_WEIGHTS_SCALE = 1.0
-    AlgorithmConfig.BIDIR = True
-    AlgorithmConfig.LOWER_SP = True
 
 def initialize_seeds(seed: int = None, use_deterministic: bool = None):
     """
@@ -340,10 +328,12 @@ def set_config_ablation(ablation: int, fastmode: bool = True):
 
     Args:
         ablation: Ablation number (0 = baseline, no extra overrides).
-        fastmode: If False, disables FastMode and TorchCompile.
+        fastmode: If False, disables FastMode and TORCH_COMPILE.
     """
     if not fastmode:
-        AlgorithmConfig.TorchCompile = False
+        AlgorithmConfig.TORCH_COMPILE = False
+
+    AlgorithmConfig.USE_CUSTOM_OP = False
 
     if ablation == 0:
         pass
@@ -362,51 +352,9 @@ def set_config_ablation(ablation: int, fastmode: bool = True):
     elif ablation == 6:
         # Solid Primitives. 
         AlgorithmConfig.PRIM_TYPE = "SolidSF"
-
-
-
-
-    if ablation == 31:
+    elif ablation == 7:
         AlgorithmConfig.PRIM_TYPE = "VarAxisSF"
-        new_loss_lambda()
-    elif ablation == 32:
-        AlgorithmConfig.PRIM_TYPE = "VarAxisSPP"
-        new_loss_lambda()
-    elif ablation == 33:
-        AlgorithmConfig.PRIM_TYPE = "VarAxisSG"
-        new_loss_lambda()
-    elif ablation == 34:
-        AlgorithmConfig.PRIM_TYPE = "Cuboid"
-        new_loss_lambda()
-    elif ablation == 35:
-        AlgorithmConfig.PRIM_TYPE = "VarAxisSQ"
-        new_loss_lambda()
-    elif ablation == 36:
-        # Original Submission
-        AlgorithmConfig.PRIM_TYPE = "SuperFrustum"
-        cvpr_submission_settings()
-    elif ablation == 37:
-        # Original submission settings with old mesh preprocessing.
-        AlgorithmConfig.PRIM_TYPE = "SuperFrustum"
-        AlgorithmConfig.OLD_MESH_PROCESS: bool = True
-        cvpr_submission_settings()
-
-    elif ablation == 105:
-        # ADD GRADUAL LOSS WEIGHTS
+    elif ablation == 8:
         AlgorithmConfig.PRIM_TYPE = "VarAxisSF"
-        AlgorithmConfig.SMOOTHEN = False
-        new_loss_lambda()
-        AlgorithmConfig.BIDIR = True
-        AlgorithmConfig.LOSS_SURFACE_ADJ_SDF: bool = True
-        AlgorithmConfig.LOWER_SP = True
-        # Modify for cheap:
-        AlgorithmConfig.MPS_MIN_IMPROVEMENT: float = 0.005
-        AlgorithmConfig.MIN_VOLUME_LIMIT_FOR_REINIT: float = 2e-4
-        AlgorithmConfig.REFIT_MAX_ITER: int = 5
-        # AlgorithmConfig.DECOMPOSE_CONFIG = {
-        #     "min_eroded_part_size_ratio": 0.005,
-        #     "min_part_size_ratio": 0.0001,
-        #     "size_limit": 20,
-        #     "max_msd_iter": 7,
-        # }
-
+        AlgorithmConfig.USE_CUSTOM_OP = True
+        AlgorithmConfig.TORCH_COMPILE = False

@@ -70,6 +70,7 @@ VALID_BATCHED_STOCHASTIC_SU_CLASSES = (
     sps.SolidSFPackedBatchedStochasticSU,
     sps.VarAxisSQPackedBatchedStochasticSU,
     sps.VarAxisSFPackedBatchedStochasticSU,
+    sps.CustomVASF,
     sps.VarAxisSPPPackedBatchedStochasticSU,
     sps.VarAxisSGPackedBatchedStochasticSU,
 )

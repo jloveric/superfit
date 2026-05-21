@@ -53,6 +53,8 @@ def compile_cached_with_dummy_opt(in_program, sketcher,
 
         def execute(coords, all_params):
             params, su_vals, logits, temperature = all_params 
+            if hasattr(handler, "batched_su_eval_function"):
+                return handler.batched_su_eval_function(coords, params, su_vals, logits, temperature)
             output = handler.batched_eval_function(coords, params, logits, temperature)
             K = output.shape[0]
 

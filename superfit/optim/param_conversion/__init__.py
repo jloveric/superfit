@@ -15,7 +15,7 @@ is strictly forbidden unless prior written permission is obtained
 from Adobe.
 """
 from .conversion import transform_to_tunable, params_from_variables
-from .sf_handler import SFHandler, SolidSFHandler, VarAxisSFHandler
+from .sf_handler import SFHandler, SolidSFHandler, VarAxisSFHandler, CustomVASFHandler
 from .other_handler import SQHandler, CuboidHandler
 from .sg_handler import SGHandler, VarAxisSGHandler
 from .spproto_handler import SPProtoHandler, VarAxisSPPHandler
@@ -26,6 +26,7 @@ __all__ = [
     "SFHandler",
     "SolidSFHandler",
     "VarAxisSFHandler",
+    "CustomVASFHandler",
     "SQHandler",
     "CuboidHandler",
     "SGHandler",

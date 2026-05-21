@@ -1,0 +1,5 @@
+{
+  "data_base": "./data",
+  "project_base": ".",
+  "outputs_base": "./outputs"
+}

@@ -153,6 +153,7 @@ activemq-data/
 # Environments
 .env
 .envrc
+superfit_config.json
 .venv
 env/
 venv/

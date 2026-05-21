@@ -242,8 +242,17 @@ def n_prims_in_expr(expr, n_prims=0):
         return 0
 
 
-def fetch_singular_expr_stochastic(expr, relaxed_eval=True):
-    expr = expr.tensor()
+def _infer_expr_device(expr, default: str = "cuda"):
+    lookup_table = getattr(expr, "lookup_table", {})
+    for value in lookup_table.values():
+        if isinstance(value, th.Tensor):
+            return str(value.device)
+    return default
+
+
+def fetch_singular_expr_stochastic(expr, relaxed_eval=True, device=None):
+    device = device or _infer_expr_device(expr)
+    expr = expr.tensor(device=device)
     logits = expr.args[1]
     logits = expr.lookup_table[logits]
     if len(expr.args) == 2:
@@ -283,16 +292,42 @@ def reduce_varaxis(expr, temperature: float = 0.1, relaxed_eval: bool = True):
     new_expr = VARAXIS_MAP[expr.__class__][int(sel_ind)](*remaining_args)
     return new_expr
 
-def fetch_singular_expr_eval(expr, temperature=0.1, relaxed_eval=True, remove_marker=True, fix_axis_variant=False, use_euler_angle=False):
+def fetch_singular_expr_eval(
+    expr,
+    temperature=0.1,
+    relaxed_eval=True,
+    remove_marker=True,
+    fix_axis_variant=False,
+    use_euler_angle=False,
+    device=None,
+):
     if isinstance(expr, StochasticPrimitive):
-        new_expr = fetch_singular_expr_stochastic(expr, relaxed_eval=relaxed_eval)
-        out_expr = fetch_singular_expr_eval(new_expr, temperature=temperature, relaxed_eval=relaxed_eval, remove_marker=remove_marker, fix_axis_variant=fix_axis_variant, use_euler_angle=use_euler_angle)
+        new_expr = fetch_singular_expr_stochastic(
+            expr, relaxed_eval=relaxed_eval, device=device
+        )
+        out_expr = fetch_singular_expr_eval(
+            new_expr,
+            temperature=temperature,
+            relaxed_eval=relaxed_eval,
+            remove_marker=remove_marker,
+            fix_axis_variant=fix_axis_variant,
+            use_euler_angle=use_euler_angle,
+            device=device,
+        )
         return out_expr
     elif isinstance(expr, VARAXIS_CLASSES):
         new_expr = reduce_varaxis(expr, temperature=temperature, relaxed_eval=relaxed_eval)
         return new_expr
     elif isinstance(expr, PrimitiveMarker):
-        in_expr = fetch_singular_expr_eval(expr.args[0], temperature=temperature, relaxed_eval=relaxed_eval, remove_marker=remove_marker, fix_axis_variant=fix_axis_variant, use_euler_angle=use_euler_angle)
+        in_expr = fetch_singular_expr_eval(
+            expr.args[0],
+            temperature=temperature,
+            relaxed_eval=relaxed_eval,
+            remove_marker=remove_marker,
+            fix_axis_variant=fix_axis_variant,
+            use_euler_angle=use_euler_angle,
+            device=device,
+        )
         if fix_axis_variant:
             in_expr = convert_marked_axis_variant_to_single_rotation(in_expr, use_euler_angle=use_euler_angle)
         if use_euler_angle:
@@ -311,7 +346,15 @@ def fetch_singular_expr_eval(expr, temperature=0.1, relaxed_eval=True, remove_ma
         has_null = False
         for arg in expr.args:
             if isinstance(arg, gls.GLFunction):
-                new_expr = fetch_singular_expr_eval(arg, temperature=temperature, relaxed_eval=relaxed_eval, remove_marker=remove_marker, fix_axis_variant=fix_axis_variant, use_euler_angle=use_euler_angle)
+                new_expr = fetch_singular_expr_eval(
+                    arg,
+                    temperature=temperature,
+                    relaxed_eval=relaxed_eval,
+                    remove_marker=remove_marker,
+                    fix_axis_variant=fix_axis_variant,
+                    use_euler_angle=use_euler_angle,
+                    device=device,
+                )
                 if not isinstance(new_expr, gls.NullExpression3D):
                     new_args.append(new_expr)
                 else:
@@ -561,6 +604,17 @@ def _permute_vec3_expr(vec3_expr: gls.GLBase, perm: tuple[int, int, int]) -> gls
     )
 
 
+def _permute_vec3_param(vec3_expr, perm: tuple[int, int, int]):
+    """Permute vec3 params while preserving the representation used by the expression."""
+    if isinstance(vec3_expr, th.Tensor):
+        return vec3_expr[list(perm)]
+    if isinstance(vec3_expr, (tuple, list, sp.Tuple)):
+        return tuple(vec3_expr[i] for i in perm)
+    if isinstance(vec3_expr, gls.GLBase):
+        return _permute_vec3_expr(vec3_expr, perm)
+    return vec3_expr
+
+
 def _rotation_matrix_to_euler_xyz(R: th.Tensor) -> th.Tensor:
     return rotf._rotation_matrix_to_euler_xyz(R)
 
@@ -615,10 +669,12 @@ def convert_marked_axis_variant_to_single_rotation(translate_expr: gls.GLBase, u
     # In the Torch evaluator wrappers, axis variants only permute `coords` and `size`.
     # So we permute only the `size` vector (arg0) and keep the remaining params unchanged.
     prim_args = list(variant_prim.get_args())
-    prim_args[0] = prim_args[0][list(perm)]
+    prim_args[0] = _permute_vec3_param(prim_args[0], perm)
     base_prim = base_cls(*prim_args)
 
-    rot_aa = axis_angle_expr.tensor().get_arg(1)
+    rot_aa = axis_angle_expr.tensor(
+        device=_infer_expr_device(axis_angle_expr, default="cpu")
+    ).get_arg(1)
     aa_b = rot_aa.reshape(-1, 3)
     R1 = axis_angle_to_rotation_matrix(aa_b)
 
@@ -646,5 +702,3 @@ def convert_marked_axis_variant_to_single_rotation(translate_expr: gls.GLBase, u
     translate_arg = translate_expr.get_arg(1)
     new_translate = gls.Translate3D(new_rotate, translate_arg)
     return new_translate
-
-

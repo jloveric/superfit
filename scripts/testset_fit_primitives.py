@@ -27,7 +27,7 @@ from superfit.utils.mesh_preprocess import process_mesh_to_sdf, cd_based_process
 from superfit.utils.config import AlgorithmConfig as AlgConf, initialize_seeds
 from superfit.utils.stats import Stats
 from superfit.utils.logger import logger
-from superfit.utils.constants import AOT_ARTIFACT_DIR, SAVE_DIR_BASE, PARTOBJAVERSE_INSTANCE_DIR
+from superfit.utils.constants import AOT_ARTIFACT_DIR, SAVE_DIR_BASE, PARTOBJAVERSE_INSTANCE_DIR, TOY4K_FILE_PATH
 from superfit.utils.io import load_toy4k_mesh_paths, load_partobjaverse_mesh_paths
 import superfit.utils.config as config_options
 from superfit.utils.io import to_cpu_recursive
@@ -41,6 +41,7 @@ def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", type=str, default="toys4k", choices=["toys4k", "partobjaverse"], help="Dataset to use: 'toys4k' or 'partobjaverse'")
+    parser.add_argument("--file_path", type=str, default=TOY4K_FILE_PATH, help="CSV file listing Toys4K mesh relative paths (one per row). Only used when --dataset toys4k.")
     parser.add_argument("--start_ind", type=int, default=0, help="Start index (inclusive)")
     parser.add_argument("--end_ind", type=int, default=100, help="End index (exclusive)")
     parser.add_argument("--ablation", type=int, default=0, help="Ablation number")
@@ -108,7 +109,7 @@ def main(args):
 
     # Load mesh paths based on dataset
     if args.dataset == "toys4k":
-        mesh_paths = load_toy4k_mesh_paths()
+        mesh_paths = load_toy4k_mesh_paths(file_path=args.file_path)
     elif args.dataset == "partobjaverse":
         mesh_paths = load_partobjaverse_mesh_paths()
     else:
@@ -172,6 +173,9 @@ def main(args):
     
     logger.info(f"\nProcessing complete. Failed indices: {failed_indices}")
 
-if __name__ == "__main__":
+def cli_main():
     args = parse_args()
     main(args)
+
+if __name__ == "__main__":
+    cli_main()

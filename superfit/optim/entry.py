@@ -20,6 +20,7 @@ import time
 import numpy as np
 import torch as th
 import superfit.symbolic as sps
+from ..symbolic.symbolic_types import VALID_BATCHED_STOCHASTIC_SU_CLASSES
 from ..symbolic.utils import (inject_temp_param, remove_temp_param,)
 
 from ..utils.config import AlgorithmConfig as AlgConf
@@ -28,12 +29,29 @@ from ..utils.logger import logger
 from .primitive_registry import HANDLER_REGISTRY
 from ..symbolic.utils import gather_primitives
 from .expr_conversion import convert_to_packed, convert_to_unpacked, convert_to_batched, convert_to_unbatched
-from .param_conversion import transform_to_tunable
+from .param_conversion import transform_to_tunable, CustomVASFHandler
 from .fast_opt import run_optimization_loop_fast
 from ..algos.eval_tools import get_recon_measure, MeasurePack
 from .compile_function import compile_cached_with_dummy_opt
 import trimesh
 from ..utils.mesh_preprocess import quick_sample_points
+
+
+def _use_custom_vasf_op():
+    return bool(getattr(AlgConf, "USE_CUSTOM_OP", False) and AlgConf.PRIM_TYPE == "VarAxisSF")
+
+
+def _convert_varaxis_to_custom_vasf(program):
+    if isinstance(program, sps.VarAxisSFPackedBatchedStochasticSU):
+        return sps.CustomVASF(*program.get_args())
+    return program
+
+
+def _convert_custom_vasf_to_varaxis(program):
+    if isinstance(program, sps.CustomVASF):
+        return sps.VarAxisSFPackedBatchedStochasticSU(*program.get_args())
+    return program
+
 
 def optimize_primitive_assembly(in_program, target_mesh, target_sdf, sketcher,
                        measure_pack, post_prune=False, original_mesh=None, original_annotations=None):
@@ -47,6 +65,13 @@ def optimize_primitive_assembly(in_program, target_mesh, target_sdf, sketcher,
     version = getattr(sps, AlgConf.PRIM_TYPE)
     handler = HANDLER_REGISTRY[version]
     assert handler is not None, f"No handler found for {in_program.base_class}"
+    use_custom_vasf = _use_custom_vasf_op()
+    runtime_handler = CustomVASFHandler if use_custom_vasf else handler
+    if not AlgConf.STOCHASTIC_DROPOUT:
+        raise NotImplementedError(
+            "Optimization with AlgConf.STOCHASTIC_DROPOUT=False is not implemented; "
+            "the downstream optimizer assumes stochastic SU logits and temperature."
+        )
     
     scope_name = "pp_optimization" if post_prune else "optimization"
 
@@ -63,11 +88,13 @@ def optimize_primitive_assembly(in_program, target_mesh, target_sdf, sketcher,
         opt_program = in_program
         opt_program = convert_to_packed(opt_program, handler)
         opt_program = convert_to_batched(opt_program, handler)
+        if use_custom_vasf:
+            opt_program = _convert_varaxis_to_custom_vasf(opt_program)
         
         opt_program = remove_temp_param(opt_program)
         tensor_list = opt_program.gather_tensor_list(type_annotate=True, index_annotate=True)
         # _, variable_list = transform_to_tunable(tensor_list)
-        variable_list = transform_to_tunable(tensor_list, handler)
+        variable_list = transform_to_tunable(tensor_list, runtime_handler)
         opt_var_list = [x for ind, x in enumerate(variable_list)]
         type_annotation = [tuple(x[1:]) for x in tensor_list]
         
@@ -78,9 +105,7 @@ def optimize_primitive_assembly(in_program, target_mesh, target_sdf, sketcher,
         for i, type_annot in enumerate(type_annotation):
             if issubclass(type_annot[0], (sps.StochasticPrimitive)):
                 special_params.append(opt_var_list[i])
-            elif issubclass(type_annot[0], (sps.SuperFrustumPackedBatchedStochastic, 
-                                            sps.SolidSFPackedBatchedStochasticSU,
-                                            )) and type_annot[2] == 2:
+            elif issubclass(type_annot[0], VALID_BATCHED_STOCHASTIC_SU_CLASSES) and type_annot[2] == 2:
                 special_params.append(opt_var_list[i])
             else:
                 regular_params.append(opt_var_list[i])
@@ -88,7 +113,12 @@ def optimize_primitive_assembly(in_program, target_mesh, target_sdf, sketcher,
         temperature = 1.0
         gmbled_opt_program = inject_temp_param(opt_program.tensor(dtype=AlgConf.OPT_DTYPE), temperature)
         
-        compiled_ops = compile_cached_with_dummy_opt(gmbled_opt_program, sketcher, handler, torch_compile=AlgConf.TorchCompile)
+        compiled_ops = compile_cached_with_dummy_opt(
+            gmbled_opt_program,
+            sketcher,
+            runtime_handler,
+            torch_compile=False if use_custom_vasf else AlgConf.TORCH_COMPILE,
+        )
         # compiled_func_relaxed = compile_program_jit_cached(gmbled_opt_program, sketcher, torch_compile=torch_compile)
         
         # Create parameter groups with different learning rates
@@ -128,6 +158,8 @@ def optimize_primitive_assembly(in_program, target_mesh, target_sdf, sketcher,
             **extra_kwargs
         )
         
+        if use_custom_vasf:
+            out_program = _convert_custom_vasf_to_varaxis(out_program)
         out_program = convert_to_unbatched(out_program, handler)
         out_program = convert_to_unpacked(out_program, handler)
             

@@ -7,12 +7,21 @@
   <a href="https://bardofcodes.github.io/superfit">
     <img src="https://img.shields.io/badge/Project%20Page-Online-brightgreen?logo=googlechrome&logoColor=white" alt="Project Page">
   </a>
+  <img src="https://img.shields.io/badge/CVPR%202026-Oral-4a90e2" alt="CVPR 2026 Oral">
+  <img src="https://img.shields.io/badge/Award%20Candidate-Top%201.8%25-c9961a" alt="Award Candidate Paper, Top 1.8%">
+</p>
+
+<p align="center">
+  <b>🏆 CVPR 2026 Oral & Award Candidate Paper (Top 1.8%)</b>
 </p>
 
 <p align="center">
   <img src="assets/banner.jpeg" alt="Banner" />
 </p>
 
+## News
+
+- **May 2026:** Added an optional custom CUDA kernel for `VarAxisSF`. On the recorded B200 benchmark, it is up to **8.5x faster end-to-end** than the dynamic `torch.compile` path, and up to **38.8x faster** for forward-only evaluation. Use it with `--ablation 8`; see [notes/custom_vasf_cuda.md](notes/custom_vasf_cuda.md) for details.
 
 SuperFit fits compact assemblies of **SuperFrusta** and other primitives to 3D shapes, built on top of **[SySL](https://github.com/BardOfCodes/sysl)**.
 See **[Install](#install-instructions)** below and **[BibTeX](#bibtex)**.
@@ -58,15 +67,26 @@ cd ..
 
 ### 4. Path Configuration
 
-Before running any scripts, edit `superfit/utils/constants.py` and set the three base paths for your machine:
+Before running any scripts, create a local path configuration:
 
-```python
-DATA_BASE = "/path/to/your/data"
-PROJECT_BASE = "/path/to/your/projects/project_sf"
-OUTPUTS_BASE = "/path/to/your/outputs"
+```bash
+cp superfit_config.example.json superfit_config.json
 ```
 
-All dataset and artifact locations are derived from these. See [notes/dataset.md](notes/dataset.md) for details on expected data layout.
+Edit `superfit_config.json` for your machine:
+
+```json
+{
+  "data_base": "/path/to/your/data",
+  "project_base": "/path/to/your/projects/project_sf",
+  "outputs_base": "/path/to/your/outputs"
+}
+```
+
+`superfit_config.json` is ignored by git. You can also point to another config
+file with `SUPERFIT_CONFIG=/path/to/superfit_config.json`. All dataset and
+artifact locations are derived from these values. See
+[notes/dataset.md](notes/dataset.md) for details on expected data layout.
 
 ## What can you do with this repository?
 
@@ -76,13 +96,13 @@ All dataset and artifact locations are derived from these. See [notes/dataset.md
 python scripts/mesh_to_assembly.py --input_path <path> --save_dir <save-dir> --fastmode --save_html --save_edit_html --save_mesh
 ```
 
-This will convert an input image into a compact assembly of SuperFrusta. Use different `--ablation` options to generate assemblies of cuboids/superquadrics/supergeons etc. Note that `--fastmode` saves torch compile artifacts at `AOT_ARTIFACT_DIR` as specified in `superfit/utils/constants.py`.
+This will convert a watertight input mesh into a compact assembly of SuperFrusta. Use different `--ablation` options to generate assemblies of cuboids/superquadrics/supergeons etc. Use `--ablation 8` to enable the custom CUDA `VarAxisSF` path after building the extension. Note that `--fastmode` saves torch compile artifacts at `AOT_ARTIFACT_DIR` as specified in `superfit/utils/constants.py`.
 
 <p align="center">
   <img src="assets/mesh_to_assembly.jpg" alt="Mesh to primitive assembly" style="max-width: 512px; width: 100%;" />
 </p>
 
-If the input mesh contains textures, you can run `fit_textures.py` to add textures to the primitive assembly. This will add 2D spherical textures to each primitive. We also have the `testset_fit_textures.py` for running this process across multiple inputs. 
+If the input mesh contains textures, you can run `fit_texture.py` to add textures to the primitive assembly. This will add 2D spherical textures to each primitive. We also have `testset_fit_textures.py` for running this process across multiple inputs.
 
 ```bash
 python scripts/fit_texture.py --input_path <path-to-assembly-pkl> --save_html --save_edit_html
@@ -93,28 +113,67 @@ python scripts/fit_texture.py --input_path <path-to-assembly-pkl> --save_html --
 </p>
 
 
-Finally, you can also generate videos of the optimization process: 
+Finally, you can render short videos from any saved `primitive_assembly.pkl`. For
+a compact demo, render the optimization replay, an exploded/colorized assembly,
+and a final spiral view, then concatenate them:
 
 ```bash
-python scripts/generate_opt_video.py --input_path <path-to-assembly-pkl> --save_dir <save-dir> 
+python scripts/visualize/generate_opt_video.py \
+  --input_pkl <path-to-assembly-pkl> --mode opt_seq --save_dir <save-dir>
+
+python scripts/visualize/generate_opt_video.py \
+  --input_pkl <path-to-assembly-pkl> --mode explode_color_compact --save_dir <save-dir>
+
+python scripts/visualize/generate_opt_video.py \
+  --input_pkl <path-to-assembly-pkl> --mode spiral --save_dir <save-dir>
+
+python scripts/visualize/generate_opt_video.py \
+  --input_pkl <path-to-assembly-pkl> --mode combine --save_dir <save-dir> \
+  --combine_segments opt_seq explode_color_compact spiral
 ```
 
 <p align="center">
-  <img src="assets/opt_video.gif" alt="Optimization video" />
+  <video src="notebooks/web/primitive_assembly_opt_then_explode.mp4" controls muted loop playsinline style="max-width: 512px; width: 100%;"></video>
 </p>
 
+Additional modes include `color_reveal`, `explode_spiral`,
+`explode_pause_fit_back`, and `legacy_opt`.
 
-Note that we don't generate html shaders for SuperQuadric since we don't have analytical sphere-tracable SDF functions for them. Additionally, please change the configuration in `superfit/utils/config.py` and `superfit/utils/render_seq.py` if needed.
+
+Note that we don't generate html shaders for SuperQuadric since we don't have analytical sphere-traceable SDF functions for them. Additionally, please change the configuration in `superfit/utils/config.py` and `superfit/visualize/config.py` (camera/video defaults) if needed.
 
 ### 2. Evaluation on TestSet
 
-1. Fit primitives to toys5k
+We also release pre-computed primitive assemblies on Hugging Face:
+
+<p align="center">
+  <a href="https://huggingface.co/datasets/bardofcodes/superfit-primitive-assemblies">
+    <img src="https://img.shields.io/badge/Hugging%20Face-Dataset-ffcc4d?logo=huggingface&logoColor=black" alt="Hugging Face Dataset">
+  </a>
+</p>
+
+The dataset contains SuperFit outputs for Toys4K and PartObjaverse, including
+`primitive_assembly.pkl`, fit configs, manifests, and evaluation summaries. The
+release is useful if you want to inspect, render, or evaluate existing
+assemblies without running the fitting pipeline yourself. See
+[notes/dataset.md](notes/dataset.md#4-released-primitive-assemblies) for the
+layout and licensing notes.
+
+> **Known issue:** `primitive_assembly.pkl` artifacts are Python pickle files.
+> Only load PKL files from trusted sources, because loading a pickle can execute
+> arbitrary code.
+
+1. Fit primitives to Toys4K
 
 ```bash
 python scripts/testset_fit_primitives.py --start_ind 0 --end_ind 500 --fastmode --save_dir <save-path>
 ```
 
-This will generate primitive assemblies for our Toy4k evaluation subset. You can use additionally use `--dataset partobjaverse` to generate the fits for PartObjaverse dataset. Finally, [`job_scripts/all_toy4k.sh`](job_scripts/all_toy4k.sh) shows how to run the process in parallel across gpus if need be.
+This will generate primitive assemblies for our Toys4K evaluation subset. You can additionally use `--dataset partobjaverse` to generate fits for the PartObjaverse dataset. To run Toys4K fitting in parallel across GPUs, launch the release script from the repository root:
+
+```bash
+bash job_scripts/all_toys4k.sh
+```
 
 2. Run Evaluation
 
@@ -133,7 +192,7 @@ For the semantic metrics, we require [faiss](https://github.com/facebookresearch
 | <p align="center"><img src="assets/app_visualizer.png" alt="Assembly Visualizer" /></p> | <p align="center"><img src="assets/app_edit_mode.png" alt="Primitive-guided Generation" /></p> |
 
 
-We also provide a complimentary web app to explore the primitive assemblies - the fitting process, the metrics, the generated shapes etc. 
+We also provide a complementary web app to explore the primitive assemblies - the fitting process, the metrics, the generated shapes etc. 
 
 
 The inferred primitive assembly can also be used as spatial guidance to generate higher fidelity meshes by combining our method with [SpaceControl](https://spacecontrol3d.github.io), by E. Fedele et al.
@@ -145,7 +204,7 @@ Find instructions to install and run this at [superfit_app](https://github.com/B
 
 Details regarding the dataset are provided in [notes/dataset.md](notes/dataset.md). For details regarding the primitives check out [notes/primitives.md](notes/primitives.md). We also made quite a few improvements over the results after our CVPR submission. These are listed in [notes/post_submission.md](notes/post_submission.md).
 
-The [`notebooks/`](notebooks/) folder contains a few iPython Notebooks which demo different aspects of our method such as (a) primitive design exploration in [notebooks/primitive_design.ipynb](notebooks/primitive_design.ipynb), (b) curvature exploration in [notebooks/curvature.ipynb](notebooks/curvature.ipynb), and (c) morphological decomposition in [notebooks/msd.ipynb](notebooks/msd.ipynb). 
+The [`notebooks/`](notebooks/) folder contains a few IPython notebooks which demo different aspects of our method such as (a) primitive design exploration in [notebooks/primitive_designs.ipynb](notebooks/primitive_designs.ipynb), (b) curvature exploration in [notebooks/mesh_curvature.ipynb](notebooks/mesh_curvature.ipynb), and (c) morphological decomposition in [notebooks/msd.ipynb](notebooks/msd.ipynb). 
 
 
 ## BibTeX
@@ -166,6 +225,6 @@ This project was developed during an internship at Adobe Research. I (Aditya) am
 
 Our sphere-tracing primitives and shaders draw heavily on foundational work by Inigo Quilez, and the broader [ShaderToy](https://www.shadertoy.com/) community — with special thanks to Paniq for creating the `superprimitive` and `uberprimitive` functions. 
 
-Finally, Anton Mikhailov, Daichi Ito, and Luc Chamerlat from Adobe provided valuable feedback aroud primitive design, and artist needs.
+Finally, Anton Mikhailov, Daichi Ito, and Luc Chamerlat from Adobe provided valuable feedback around primitive design and artist needs.
 
 For questions reach out at `adityaganeshan@gmail.com`.

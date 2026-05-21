@@ -26,7 +26,7 @@ from sysl.shader import evaluate_to_shader
 from sysl.shader_runtime import create_multibuffer_shader_html
 from sysl.utils import recursive_sm_to_smg, recursive_gls_to_sysl
 from ..symbolic.utils import fetch_singular_expr_eval, n_prims_in_expr
-from .constants import TOY4K_PATH_PREFIX, TOY4K_CSV_FILE, PARTOBJAVERSE_MESH_DIR
+from .constants import TOY4K_PATH_PREFIX, TOY4K_FILE_PATH, PARTOBJAVERSE_MESH_DIR
 from dataclasses import is_dataclass, fields
 
 def save_html(expression, save_file_name="resfit_best_program.html"):
@@ -40,32 +40,30 @@ def save_html(expression, save_file_name="resfit_best_program.html"):
     return html_code
 
 
-def load_toy4k_mesh_paths(csv_file=TOY4K_CSV_FILE, toy4k_path_prefix=TOY4K_PATH_PREFIX):
+def load_toy4k_mesh_paths(file_path=TOY4K_FILE_PATH, toy4k_path_prefix=TOY4K_PATH_PREFIX):
     """
     Load mesh paths from toy4k dataset CSV file.
     Expected format: CSV with single column of relative paths (no header).
     
     Args:
-        csv_file: Path to CSV file. If None, uses default from constants.
+        file_path: Path to CSV file. If None, uses default from constants.
                  If relative path, assumes it's in the project root.
     
     Returns:
         List of absolute mesh file paths (strings).
     """
     
-    if not os.path.isabs(csv_file):
+    if not os.path.isabs(file_path):
         # If relative path, assume it's in the project root
         project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-        csv_path = os.path.join(project_root, csv_file)
-    else:
-        csv_path = csv_file
+        file_path = os.path.join(project_root, file_path)
+    print(file_path)
     
     mesh_paths = []
-    with open(csv_path, "r") as f:
-        reader = csv.reader(f)
-        for row in reader:
-            if len(row) >= 1 and row[0].strip():
-                mesh_paths.append(row[0].strip())
+    with open(file_path, "r") as f:
+        for line in f:
+            if line.strip():
+                mesh_paths.append(line.strip())
     
     # Convert relative paths to absolute paths
     processed_paths = []
