@@ -19,12 +19,12 @@
   <img src="assets/banner.jpeg" alt="Banner" />
 </p>
 
+SuperFit fits compact assemblies of **SuperFrusta** and other primitives to 3D shapes, built on top of **[SySL](https://github.com/BardOfCodes/sysl)**.
+See **[Install](#install-instructions)** below and **[BibTeX](#bibtex)**.
+
 ## News
 
 - **May 2026:** Added an optional custom CUDA kernel for `VarAxisSF`. On the recorded B200 benchmark, it is up to **8.5x faster end-to-end** than the dynamic `torch.compile` path, and up to **38.8x faster** for forward-only evaluation. Use it with `--ablation 8`; see [notes/custom_vasf_cuda.md](notes/custom_vasf_cuda.md) for details.
-
-SuperFit fits compact assemblies of **SuperFrusta** and other primitives to 3D shapes, built on top of **[SySL](https://github.com/BardOfCodes/sysl)**.
-See **[Install](#install-instructions)** below and **[BibTeX](#bibtex)**.
 
 ## Install Instructions
 
