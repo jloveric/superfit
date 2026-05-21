@@ -133,7 +133,7 @@ python scripts/visualize/generate_opt_video.py \
 ```
 
 <p align="center">
-  <video src="assets/primitive_assembly_opt_then_explode.mp4" controls muted loop playsinline style="max-width: 512px; width: 100%;"></video>
+  <img src="assets/primitive_assembly_opt_then_explode.gif" alt="Primitive assembly optimization and explode animation" style="max-width: 512px; width: 100%;" />
 </p>
 
 Additional modes include `color_reveal`, `explode_spiral`,
