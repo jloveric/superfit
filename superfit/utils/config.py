@@ -114,10 +114,10 @@ class AlgorithmConfig:
 
     # Quality Losses:
     STOCHASTIC_DROPOUT: bool = True
-    LOSS_PRIMITIVE_COUNT_ALPHA: float = 3e-3
+    LOSS_PRIMITIVE_COUNT_ALPHA: float = 2e-3
     LOSS_OVERLAP_ALPHA: float = 1e-1
     LOSS_SHAPE_UNOVERLAP_ALPHA: float = 1e-1
-    LOSS_PARAM_REGULARIZATION_ALPHA: float = 1e-6
+    LOSS_PARAM_REGULARIZATION_ALPHA: float = 1e-5
 
     # Tversky Loss:
     TVERSKY_MODE: bool = False
