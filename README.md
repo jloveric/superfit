@@ -110,8 +110,10 @@ artifact locations are derived from these values. See
 ### 1. Convert (watertight) meshes into Primitive Assemblies
 
 ```bash
-uv run superfit-mesh-to-pa --input_path <path> --save_dir <save-dir> --fastmode --save_html --save_edit_html --save_mesh
+uv run superfit-mesh-to-pa --input_path <path> --fastmode --save_mesh
 ```
+
+Outputs go to `outputs/<date>-<time>/` by default (e.g. `outputs/2026-06-30-12-43-05/`). Pass `--save_dir` to override.
 
 This will convert a watertight input mesh into a compact assembly of SuperFrusta. Use different `--ablation` options to generate assemblies of cuboids/superquadrics/supergeons etc. Use `--ablation 8` to enable the custom CUDA `VarAxisSF` path after building the extension. Note that `--fastmode` saves torch compile artifacts at `AOT_ARTIFACT_DIR` as specified in `superfit/utils/constants.py`.
 

@@ -27,7 +27,7 @@ from superfit.utils.editing import save_edit_mode_html
 from superfit.utils.io import to_cpu_recursive, save_html
 from superfit.utils.mesh_preprocess import cd_based_process_mesh_to_sdf
 from superfit.utils.config import AlgorithmConfig as AlgConf, initialize_seeds
-from superfit.utils.constants import AOT_ARTIFACT_DIR
+from superfit.utils.constants import AOT_ARTIFACT_DIR, default_timestamped_output_dir
 from superfit.algos.resfit import resfit
 from superfit.algos.eval_tools import MeasurePack
 from superfit.algos.prune import sampling_based_pruning
@@ -40,10 +40,21 @@ th.set_float32_matmul_precision("medium")
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--input_path", type=str, required=True)
-    parser.add_argument("--save_dir", type=str, required=True)
+    parser.add_argument(
+        "--save_dir",
+        type=str,
+        default=None,
+        help="Output directory (default: outputs/<date>-<time>).",
+    )
     parser.add_argument("--profile_path", type=str, required=False, default=None)
     parser.add_argument("--fastmode", action="store_true", required=False, default=False)
-    parser.add_argument("--ablation", type=int, default=0, help="Ablation number.")
+    parser.add_argument("--ablation", type=int, default=0, help="Ablation number (0–8; 5 = paper settings).")
+    parser.add_argument(
+        "--data-resolution",
+        type=int,
+        default=None,
+        help="SDF grid resolution (default 256). Use 64 or 128 on GPUs with ≤8GB VRAM.",
+    )
     parser.add_argument("--aot_postfix", type=str, default="aott", help="AOT artifact postfix.")
     parser.add_argument("--save_html", action="store_true", required=False, default=False)
     parser.add_argument("--save_edit_html", action="store_true", required=False, default=False)
@@ -55,13 +66,22 @@ def parse_args():
 def main_shape_wise(args):
         
     input_path = args.input_path
-    save_dir = args.save_dir
-    
+    save_dir = args.save_dir or default_timestamped_output_dir()
+    logger.info(f"Writing outputs to {save_dir}")
     if not os.path.exists(save_dir):
         os.makedirs(save_dir, exist_ok=True)
     # Configuration setup. 
     config_options.main_setting()
     config_options.set_config_ablation(args.ablation, fastmode=args.fastmode)
+    if args.ablation not in range(9):
+        logger.warning(f"Unknown ablation {args.ablation}; using default config (see ablations 0–8).")
+    if args.data_resolution is not None:
+        config_options.apply_data_resolution(args.data_resolution)
+        logger.info(
+            f"Using data resolution {AlgConf.DATA_RESOLUTION} "
+            f"(prune={AlgConf.PRUNE_RESOLUTION}, decompose={AlgConf.DECOMPOSE_RESOLUTION}, "
+            f"opt={AlgConf.OPT_RESOLUTION})"
+        )
     
     save_config_file = os.path.join(save_dir, "config.json")
     AlgConf.save_to_file(save_config_file)

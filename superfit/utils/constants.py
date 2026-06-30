@@ -16,6 +16,7 @@ from Adobe.
 """
 import json
 import os
+from datetime import datetime
 from pathlib import Path
 
 USE_CUDA = True
@@ -68,3 +69,8 @@ AOT_ARTIFACT_DIR = f"{DATA_BASE}/project_sf/aot"
 SAVE_DIR_BASE = OUTPUTS_BASE
 TOY4K_FILE_PATH = "superfit/dataset/new_testset.csv"
 SEMANTIC_LOC = f"{PROJECT_BASE}/PartField/"
+
+
+def default_timestamped_output_dir() -> str:
+    stamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+    return str(Path(OUTPUTS_BASE) / stamp)

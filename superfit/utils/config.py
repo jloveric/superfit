@@ -186,6 +186,13 @@ def main_setting():
         "max_msd_iter": 5,
     }
 
+
+def apply_data_resolution(data_resolution: int) -> None:
+    AlgorithmConfig.DATA_RESOLUTION = data_resolution
+    AlgorithmConfig.PRUNE_RESOLUTION = max(32, data_resolution // 2)
+    AlgorithmConfig.DECOMPOSE_RESOLUTION = data_resolution
+    AlgorithmConfig.OPT_RESOLUTION = max(32, data_resolution // 4)
+
 def fast_test_override():
     AlgorithmConfig.N_ITERS = 10
     AlgorithmConfig.MAX_ITER = 20
