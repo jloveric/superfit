@@ -20,6 +20,12 @@ def parse_args():
         description="Reconstruct a triangle mesh from a point cloud using Open3D."
     )
     parser.add_argument(
+        "--preset",
+        choices=("default", "dense"),
+        default="default",
+        help="Quality preset. dense raises detail-focused reconstruction settings.",
+    )
+    parser.add_argument(
         "--input",
         required=True,
         help="Input point cloud path (e.g. .ply).",
@@ -76,6 +82,18 @@ def parse_args():
         type=int,
         default=30,
         help="Max neighbors for normal estimation.",
+    )
+    parser.add_argument(
+        "--normal-orientation",
+        choices=("consistent", "camera"),
+        default="consistent",
+        help="How to orient estimated normals before reconstruction.",
+    )
+    parser.add_argument(
+        "--normal-consistent-k",
+        type=int,
+        default=40,
+        help="Neighbors used for consistent tangent-plane normal orientation.",
     )
     parser.add_argument(
         "--remove-statistical-outliers",
@@ -200,13 +218,31 @@ def estimate_normals(
     pcd: o3d.geometry.PointCloud,
     radius: float,
     max_nn: int,
+    orientation: str,
+    consistent_k: int,
 ) -> None:
     pcd.estimate_normals(
         search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=radius, max_nn=max_nn)
     )
-    pcd.orient_normals_towards_camera_location(
-        camera_location=np.array([2.0, 2.0, 2.0], dtype=np.float64)
-    )
+    if orientation == "consistent":
+        pcd.orient_normals_consistent_tangent_plane(consistent_k)
+    else:
+        pcd.orient_normals_towards_camera_location(
+            camera_location=np.array([2.0, 2.0, 2.0], dtype=np.float64)
+        )
+    pcd.normalize_normals()
+
+
+def apply_preset_defaults(args: argparse.Namespace) -> None:
+    if args.preset != "dense":
+        return
+
+    args.target_points = max(args.target_points, 1_000_000)
+    args.poisson_depth = max(args.poisson_depth, 12)
+    args.normal_max_nn = max(args.normal_max_nn, 60)
+    args.normal_consistent_k = max(args.normal_consistent_k, 80)
+    args.voxel_resolution = max(args.voxel_resolution, 256)
+    args.density_quantile = min(args.density_quantile, 0.008)
 
 
 def reconstruct_poisson(
@@ -288,6 +324,7 @@ def print_mesh_stats(mesh: trimesh.Trimesh) -> None:
 
 def main() -> None:
     args = parse_args()
+    apply_preset_defaults(args)
 
     print(f"Loading point cloud: {args.input}")
     pcd = load_point_cloud(args.input)
@@ -315,7 +352,13 @@ def main() -> None:
         normal_radius = args.normal_radius
         if normal_radius is None:
             normal_radius = voxel_size * 2.0
-        estimate_normals(pcd, radius=normal_radius, max_nn=args.normal_max_nn)
+        estimate_normals(
+            pcd,
+            radius=normal_radius,
+            max_nn=args.normal_max_nn,
+            orientation=args.normal_orientation,
+            consistent_k=args.normal_consistent_k,
+        )
 
         if method in ("auto", "poisson"):
             print("Reconstructing mesh with Poisson...")
@@ -332,8 +375,19 @@ def main() -> None:
             mesh = open3d_to_trimesh(o3d_mesh)
 
         if method == "auto" and not mesh.is_watertight:
-            print("Poisson mesh is not watertight; falling back to voxel reconstruction...")
-            method = "voxel"
+            print("Poisson mesh is not watertight; retrying Poisson with denser settings...")
+            retry_depth = min(args.poisson_depth + 1, 13)
+            retry_quantile = args.density_quantile * 0.5
+            retry_mesh = reconstruct_poisson(
+                pcd,
+                depth=retry_depth,
+                scale=args.poisson_scale,
+                density_quantile=retry_quantile,
+            )
+            mesh = open3d_to_trimesh(retry_mesh)
+            if not mesh.is_watertight:
+                print("Retry still not watertight; falling back to voxel reconstruction...")
+                method = "voxel"
 
     if method == "voxel":
         print("Reconstructing mesh with voxel occupancy + marching cubes...")

@@ -28,19 +28,54 @@ See **[Install](#install-instructions)** below and **[BibTeX](#bibtex)**.
 
 ## Install Instructions
 
+SuperFit fitting (`superfit-mesh-to-pa`) requires **all four steps below**, not just `uv sync`. Skipping cubvh, kaolin, or the Python/CUDA notes below produces the common `ModuleNotFoundError` / build failures on fresh checkouts.
+
+### Quick install (Linux, mesh or point-cloud fitting)
+
+Run from the repo root after cloning:
+
+```bash
+git clone https://github.com/BardOfCodes/superfit.git
+cd superfit
+
+# 1) Python + locked deps (uses .python-version → uv-managed 3.11.11)
+uv python install 3.11.11
+uv sync --extra recon          # recon = open3d + scikit-image for PLY → mesh
+uv pip install ninja           # speeds up CUDA extension builds
+
+# 2) cubvh (required; not on PyPI). Point nvcc at CUDA 12.x matching PyTorch.
+#    Default /usr/local/cuda is often 11.8 and will fail against torch cu126.
+export CUDA_HOME=/usr/local/cuda-12.4   # adjust if your CUDA 12.x path differs
+export PATH="$CUDA_HOME/bin:$PATH"
+export CC=gcc CXX=g++
+uv pip install "cubvh @ git+https://github.com/ashawkey/cubvh" --no-build-isolation
+
+# 3) kaolin (required for FlexiCubes mesh extraction; no PyPI wheel for torch 2.12)
+git clone --recursive https://github.com/NVIDIAGameWorks/kaolin.git /tmp/kaolin
+cd /tmp/kaolin
+uv pip install -r tools/build_requirements.txt -r tools/viz_requirements.txt -r tools/requirements.txt
+export IGNORE_TORCH_VER=1 CUDA_HOME=/usr/local/cuda-12.4
+../superfit/.venv/bin/python setup.py install   # run from kaolin dir, not repo root
+cd -
+
+# 4) Smoke test
+uv run python -c "import cubvh, kaolin, superfit; print('install ok')"
+```
+
+Use `uv run ...` for all scripts (no manual `activate` needed). For point clouds, reconstruct a watertight mesh first with `superfit-pointcloud-to-mesh` (needs `--extra recon` above), then run `superfit-mesh-to-pa`.
+
 ### 1. Create the environment with uv
 
 [uv](https://docs.astral.sh/uv/) installs SuperFit into a local `.venv`, resolves locked dependencies from `uv.lock`, and installs the package in editable mode.
 
 ```bash
-git clone https://github.com/BardOfCodes/superfit.git
-cd superfit
-uv sync
+uv python install 3.11.11   # once per machine; .python-version pins this for uv sync
+uv sync --extra recon       # include recon if you use PLY point clouds
 ```
 
-> **Build note:** `geolipi` depends on `scikit-fmm`, which has no Linux wheel and must be compiled. Ensure a working `ninja` is on your `PATH` (e.g. `python -m pip install ninja`, or `apt install ninja-build`).
+> **Build note:** `geolipi` depends on `scikit-fmm`, which has no Linux wheel on Linux and must be compiled. Use uv-managed Python 3.11 (`uv python install 3.11.11`) rather than a system Python missing dev headers (e.g. `/usr/bin/python3.11` without `python3.11-dev`). Install `ninja` (`uv pip install ninja` or `apt install ninja-build`).
 
-Optional dependency sets:
+Other optional dependency sets:
 
 ```bash
 uv sync --extra eval        # FAISS GPU for evaluation
@@ -59,28 +94,40 @@ Otherwise run commands with `uv run ...` from the repo root; that uses the proje
 
 ### 2. Install cubvh
 
-[cubvh](https://github.com/ashawkey/cubvh) provides GPU-accelerated BVH queries and is required by the fitting pipeline. It is not on PyPI; install it into the project environment after `uv sync`:
+[cubvh](https://github.com/ashawkey/cubvh) provides GPU-accelerated BVH queries and is **required** by the fitting pipeline. It is not on PyPI; install it into the project environment after `uv sync`:
 
 ```bash
+export CUDA_HOME=/usr/local/cuda-12.4   # must be CUDA 12.x; see torch.version.cuda below
+export PATH="$CUDA_HOME/bin:$PATH"
+export CC=gcc CXX=g++
+uv pip install ninja
 uv pip install "cubvh @ git+https://github.com/ashawkey/cubvh" --no-build-isolation
 ```
 
-This compiles a CUDA extension against your installed PyTorch, so `torch` must already be present and your system CUDA toolkit should match the PyTorch CUDA build (check with `uv run python -c "import torch; print(torch.version.cuda)"` and `nvcc --version`).
+This compiles a CUDA extension against your installed PyTorch. Check versions with:
+
+```bash
+uv run python -c "import torch; print('torch cuda', torch.version.cuda)"
+nvcc --version
+```
+
+If `nvcc` reports 11.x but PyTorch reports 12.x, set `CUDA_HOME` to a CUDA 12 toolkit before building cubvh.
 
 ### 3. Install kaolin
 
-[Kaolin](https://github.com/NVIDIAGameWorks/kaolin) is used for FlexiCubes meshing. See the [kaolin installation docs](https://kaolin.readthedocs.io/en/latest/notes/installation.html) for full details.
+[Kaolin](https://github.com/NVIDIAGameWorks/kaolin) is used for FlexiCubes meshing and is **required** for `superfit-mesh-to-pa`. See the [kaolin installation docs](https://kaolin.readthedocs.io/en/latest/notes/installation.html) for full details.
 
 ```bash
 git clone --recursive https://github.com/NVIDIAGameWorks/kaolin.git
 cd kaolin
-pip install -r tools/build_requirements.txt -r tools/viz_requirements.txt -r tools/requirements.txt
+uv pip install -r tools/build_requirements.txt -r tools/viz_requirements.txt -r tools/requirements.txt
 export IGNORE_TORCH_VER=1
-python setup.py install
+export CUDA_HOME=/usr/local/cuda-12.4
+../superfit/.venv/bin/python setup.py install   # must run from kaolin/, not superfit/
 cd ..
 ```
 
-> **Note:** `IGNORE_TORCH_VER=1` is needed because kaolin's version check may not yet list PyTorch 2.9.
+> **Note:** `IGNORE_TORCH_VER=1` is needed because kaolin's version check may not yet list the PyTorch version pinned in this repo.
 
 ### 4. Path Configuration
 
