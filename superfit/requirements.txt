@@ -1,2 +1,2 @@
 # Legacy file – canonical dependency declarations live in pyproject.toml.
-# Use `conda env create -f env.yml` or `pip install -e .` to install.
+# Use `uv sync` (see README) or `conda env create -f env.yml` to install.

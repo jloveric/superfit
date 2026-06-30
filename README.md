@@ -28,27 +28,44 @@ See **[Install](#install-instructions)** below and **[BibTeX](#bibtex)**.
 
 ## Install Instructions
 
-### 1. Create the conda environment
+### 1. Create the environment with uv
+
+[uv](https://docs.astral.sh/uv/) installs SuperFit into a local `.venv`, resolves locked dependencies from `uv.lock`, and installs the package in editable mode.
 
 ```bash
 git clone https://github.com/BardOfCodes/superfit.git
 cd superfit
-conda env create -f env.yml
-conda activate superfit
+uv sync
 ```
 
-This installs PyTorch 2.9.1 (CUDA 12.8), all core Python dependencies, and `superfit` itself in editable mode.
+> **Build note:** `geolipi` depends on `scikit-fmm`, which has no Linux wheel and must be compiled. Ensure a working `ninja` is on your `PATH` (e.g. `python -m pip install ninja`, or `apt install ninja-build`).
+
+Optional dependency sets:
+
+```bash
+uv sync --extra eval        # FAISS GPU for evaluation
+uv sync --extra semantic    # semantic segmentation extras
+uv sync --extra render      # rendering / visualization extras
+uv sync --group dev         # pytest and ruff
+```
+
+Activate the virtual environment if you prefer an explicit shell:
+
+```bash
+source .venv/bin/activate
+```
+
+Otherwise run commands with `uv run ...` from the repo root; that uses the project `.venv` automatically (no `python` on your PATH required).
 
 ### 2. Install cubvh
 
-[cubvh](https://github.com/ashawkey/cubvh) provides GPU-accelerated BVH queries and is required by the fitting pipeline.
+[cubvh](https://github.com/ashawkey/cubvh) provides GPU-accelerated BVH queries and is required by the fitting pipeline. It is not on PyPI; install it into the project environment after `uv sync`:
 
 ```bash
-git clone https://github.com/ashawkey/cubvh.git
-cd cubvh
-python setup.py install
-cd ..
+uv pip install "cubvh @ git+https://github.com/ashawkey/cubvh" --no-build-isolation
 ```
+
+This compiles a CUDA extension against your installed PyTorch, so `torch` must already be present and your system CUDA toolkit should match the PyTorch CUDA build (check with `uv run python -c "import torch; print(torch.version.cuda)"` and `nvcc --version`).
 
 ### 3. Install kaolin
 
@@ -93,7 +110,7 @@ artifact locations are derived from these values. See
 ### 1. Convert (watertight) meshes into Primitive Assemblies
 
 ```bash
-python scripts/mesh_to_assembly.py --input_path <path> --save_dir <save-dir> --fastmode --save_html --save_edit_html --save_mesh
+uv run superfit-mesh-to-pa --input_path <path> --save_dir <save-dir> --fastmode --save_html --save_edit_html --save_mesh
 ```
 
 This will convert a watertight input mesh into a compact assembly of SuperFrusta. Use different `--ablation` options to generate assemblies of cuboids/superquadrics/supergeons etc. Use `--ablation 8` to enable the custom CUDA `VarAxisSF` path after building the extension. Note that `--fastmode` saves torch compile artifacts at `AOT_ARTIFACT_DIR` as specified in `superfit/utils/constants.py`.
@@ -105,7 +122,7 @@ This will convert a watertight input mesh into a compact assembly of SuperFrusta
 If the input mesh contains textures, you can run `fit_texture.py` to add textures to the primitive assembly. This will add 2D spherical textures to each primitive. We also have `testset_fit_textures.py` for running this process across multiple inputs.
 
 ```bash
-python scripts/fit_texture.py --input_path <path-to-assembly-pkl> --save_html --save_edit_html
+uv run python scripts/fit_texture.py --input_path <path-to-assembly-pkl> --save_html --save_edit_html
 ```
 
 <p align="center">
@@ -118,16 +135,16 @@ a compact demo, render the optimization replay, an exploded/colorized assembly,
 and a final spiral view, then concatenate them:
 
 ```bash
-python scripts/visualize/generate_opt_video.py \
+uv run python scripts/visualize/generate_opt_video.py \
   --input_pkl <path-to-assembly-pkl> --mode opt_seq --save_dir <save-dir>
 
-python scripts/visualize/generate_opt_video.py \
+uv run python scripts/visualize/generate_opt_video.py \
   --input_pkl <path-to-assembly-pkl> --mode explode_color_compact --save_dir <save-dir>
 
-python scripts/visualize/generate_opt_video.py \
+uv run python scripts/visualize/generate_opt_video.py \
   --input_pkl <path-to-assembly-pkl> --mode spiral --save_dir <save-dir>
 
-python scripts/visualize/generate_opt_video.py \
+uv run python scripts/visualize/generate_opt_video.py \
   --input_pkl <path-to-assembly-pkl> --mode combine --save_dir <save-dir> \
   --combine_segments opt_seq explode_color_compact spiral
 ```
@@ -166,7 +183,7 @@ layout and licensing notes.
 1. Fit primitives to Toys4K
 
 ```bash
-python scripts/testset_fit_primitives.py --start_ind 0 --end_ind 500 --fastmode --save_dir <save-path>
+uv run superfit-fit-testset --start_ind 0 --end_ind 500 --fastmode --save_dir <save-path>
 ```
 
 This will generate primitive assemblies for our Toys4K evaluation subset. You can additionally use `--dataset partobjaverse` to generate fits for the PartObjaverse dataset. To run Toys4K fitting in parallel across GPUs, launch the release script from the repository root:
@@ -180,7 +197,7 @@ bash job_scripts/all_toys4k.sh
 Once the primitives are generated, you can run: 
 
 ```bash
-python scripts/testset_eval.py --input_path <save-path> --save_per_instance_metrics --start_ind 0 --end_ind 500 --include_semantic
+uv run superfit-eval-testset --input_path <save-path> --save_per_instance_metrics --start_ind 0 --end_ind 500 --include_semantic
 ```
 
 For the semantic metrics, we require [faiss](https://github.com/facebookresearch/faiss) as well as [PartField](https://github.com/nv-tlabs/PartField). Add `--include_semantic` to evaluate the semantic metrics.

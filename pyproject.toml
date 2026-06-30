@@ -44,15 +44,33 @@ render = [
   "moderngl>=5.10",
   "moderngl-window>=2.4",
 ]
-dev = [
-  "pytest>=8.0",
-  "ruff>=0.5.0",
+recon = [
+  "open3d>=0.18",
+  "scikit-image>=0.22",
 ]
 
 [project.scripts]
 superfit-fit-testset = "scripts.testset_fit_primitives:cli_main"
 superfit-mesh-to-pa = "scripts.mesh_to_assembly:cli_main"
+superfit-pointcloud-to-mesh = "scripts.pointcloud_to_mesh:main"
 superfit-eval-testset = "scripts.testset_eval:main"
+
+[dependency-groups]
+dev = [
+  "pytest>=8.0",
+  "ruff>=0.5.0",
+]
+
+[tool.uv]
+package = true
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu126" }
 
 [tool.setuptools]
 include-package-data = true

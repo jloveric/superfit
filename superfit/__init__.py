@@ -14,9 +14,16 @@ Dissemination of this information or reproduction of this material
 is strictly forbidden unless prior written permission is obtained
 from Adobe.
 """
+import sys
+
+from .utils import config as _config  # noqa: F401 — bind utils package before star imports
+
 from .mat_opt import *
 from .shader import *
 from .symbolic import *
 from .torch_compute import *
+
+if "superfit.utils" in sys.modules:
+    sys.modules[__name__].utils = sys.modules["superfit.utils"]
 
 __version__ = "0.1.0"

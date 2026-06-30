@@ -16,10 +16,10 @@ from Adobe.
 """
 import os
 import argparse
-import torch as th
 import _pickle as cPickle
-from geolipi.torch_compute import Sketcher, recursive_evaluate
 import superfit.utils.config as config_options
+import torch as th
+from geolipi.torch_compute import Sketcher, recursive_evaluate
 from superfit.utils.stats import Stats
 from superfit.utils.logger import logger
 from superfit.utils.mesh_sdf import sdf_to_mesh
